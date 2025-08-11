@@ -51,15 +51,20 @@ interface FunctionContext {
 }
 
 module.exports = async ({ req, res, log, error }: FunctionContext) => {
-  const client = new Client()
-    .setEndpoint('https://cloud.appwrite.io/v1')
-    .setProject(process.env.APPWRITE_PROJECT_ID);
+  if (!process.env.APPWRITE_PROJECT_ID) {
+    error('APPWRITE_PROJECT_ID is not defined');
+    return res.json({ ok: false, error: 'APPWRITE_PROJECT_ID is not defined' }, 500);
+  }
 
   if (!process.env.APPWRITE_API_KEY) {
     error('APPWRITE_API_KEY is not defined');
     return res.json({ ok: false, error: 'APPWRITE_API_KEY is not defined' }, 500);
   }
-  client.setKey(process.env.APPWRITE_API_KEY);
+
+  const client = new Client()
+    .setEndpoint('https://cloud.appwrite.io/v1')
+    .setProject(process.env.APPWRITE_PROJECT_ID)
+    .setKey(process.env.APPWRITE_API_KEY);
 
   log(`Client initialized with project ID: ${process.env.APPWRITE_PROJECT_ID}`);
 
@@ -243,7 +248,7 @@ async function sendPushNotifications(
 
   log(`Expo payload: ${JSON.stringify(expoPayload)}`);
 
-  const response = await nodeFetch('https://exp.host/--/api/v2/push/send', {
+  const response = await nodeFetch('https://exp.host/--/api/v2/push/send' as string, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
