@@ -79,7 +79,12 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
       EXPO_ACCESS_TOKEN: !!process.env.EXPO_ACCESS_TOKEN
     })}`);
 
-    const webhookPayload: WebhookPayload = JSON.parse(req.body);
+    let webhookPayload: WebhookPayload;
+    if (typeof req.body === 'string') {
+      webhookPayload = JSON.parse(req.body);
+    } else {
+      webhookPayload = req.body;
+    }
     log(`Received webhook payload: ${JSON.stringify(webhookPayload)}`);
 
     if (webhookPayload.events && webhookPayload.events.length > 0) {
