@@ -1,12 +1,53 @@
-const { Client, Databases, Messaging } = require('appwrite');
-const fetch = require('node-fetch');
+import { Client, Databases, Messaging, type Models } from 'appwrite';
+import nodeFetch from 'node-fetch';
 
-module.exports = async ({ req, res, log, error }) => {
+// Define interfaces for payloads and documents
+interface WebhookPayload {
+  events: string[];
+  [key: string]: any;
+}
+
+interface PostDocument extends Models.Document {
+  authorId: string;
+  authorName?: string;
+  title?: string;
+  content?: string;
+}
+
+interface CommentDocument extends Models.Document {
+  userId: string;
+  authorName?: string;
+  postId: string;
+}
+
+interface NotificationData {
+  userIds: string[];
+  title: string;
+  body: string;
+  postId: string;
+  type: 'new_post' | 'new_comment';
+}
+
+interface FunctionContext {
+  req: {
+    body: string;
+    headers: Record<string, string>;
+    method: string;
+    path: string;
+  };
+  res: {
+    json: (data: any, status?: number) => void;
+  };
+  log: (msg: string) => void;
+  error: (msg: string) => void;
+}
+
+module.exports = async ({ req, res, log, error }: FunctionContext) => {
   const client = new Client();
   client
     .setEndpoint('https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
-    [(Client.prototype as any).setKey](process.env.APPWRITE_API_KEY);
+    [(Client.prototype as any).setKey](process.env.APPWRITE_API_KEY); // Type assertion for setKey
 
   log(`Client initialized with project ID: ${process.env.APPWRITE_PROJECT_ID}`);
 
@@ -22,7 +63,7 @@ module.exports = async ({ req, res, log, error }) => {
       EXPO_ACCESS_TOKEN: !!process.env.EXPO_ACCESS_TOKEN
     })}`);
 
-    const webhookPayload = JSON.parse(req.body);
+    const webhookPayload: WebhookPayload = JSON.parse(req.body);
     log(`Received webhook payload: ${JSON.stringify(webhookPayload)}`);
 
     if (webhookPayload.events && webhookPayload.events.length > 0) {
@@ -30,13 +71,22 @@ module.exports = async ({ req, res, log, error }) => {
     } else {
       return await handleDirectCall(webhookPayload, messaging, client, log, error, res);
     }
-  } catch (e) {
-    error(`Failed to process request: ${e.message}`);
-    return res.json({ ok: false, error: e.message }, 500);
+  } catch (e: unknown) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    error(`Failed to process request: ${errorMsg}`);
+    return res.json({ ok: false, error: errorMsg }, 500);
   }
 };
 
-async function handleWebhookEvent(payload, databases, messaging, client, log, error, res) {
+async function handleWebhookEvent(
+  payload: WebhookPayload,
+  databases: Databases,
+  messaging: Messaging,
+  client: Client,
+  log: (msg: string) => void,
+  error: (msg: string) => void,
+  res: { json: (data: any, status?: number) => void }
+) {
   const eventType = payload.events[0];
   log(`Event type received: ${eventType}`);
   const document = payload;
@@ -51,7 +101,15 @@ async function handleWebhookEvent(payload, databases, messaging, client, log, er
   }
 }
 
-async function handleNewPost(postDocument, databases, messaging, client, log, error, res) {
+async function handleNewPost(
+  postDocument: PostDocument,
+  databases: Databases,
+  messaging: Messaging,
+  client: Client,
+  log: (msg: string) => void,
+  error: (msg: string) => void,
+  res: { json: (data: any, status?: number) => void }
+) {
   try {
     log(`Post document: ${JSON.stringify(postDocument)}`);
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
@@ -59,15 +117,15 @@ async function handleNewPost(postDocument, databases, messaging, client, log, er
 
     const users = await databases.listDocuments(databaseId, usersCollectionId, [], 100);
     const userIds = users.documents
-      .map(user => user.$id)
-      .filter(userId => userId !== postDocument.authorId);
+      .map((user: Models.Document) => user.$id)
+      .filter((userId: string) => userId !== postDocument.authorId);
 
     if (userIds.length === 0) {
       log('No users to notify for new post');
       return res.json({ ok: true, message: 'No users to notify' });
     }
 
-    const notificationData = {
+    const notificationData: NotificationData = {
       userIds,
       title: 'New Post',
       body: `New post by ${postDocument.authorName || 'Someone'}: ${postDocument.title || postDocument.content?.slice(0, 50) + '...'}`,
@@ -76,13 +134,22 @@ async function handleNewPost(postDocument, databases, messaging, client, log, er
     };
 
     return await sendPushNotifications(notificationData, messaging, client, log, error, res);
-  } catch (e) {
-    error(`Error handling new post: ${e.message}`);
-    return res.json({ ok: false, error: e.message }, 500);
+  } catch (e: unknown) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    error(`Error handling new post: ${errorMsg}`);
+    return res.json({ ok: false, error: errorMsg }, 500);
   }
 }
 
-async function handleNewComment(commentDocument, databases, messaging, client, log, error, res) {
+async function handleNewComment(
+  commentDocument: CommentDocument,
+  databases: Databases,
+  messaging: Messaging,
+  client: Client,
+  log: (msg: string) => void,
+  error: (msg: string) => void,
+  res: { json: (data: any, status?: number) => void }
+) {
   try {
     log(`Comment document: ${JSON.stringify(commentDocument)}`);
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
@@ -97,7 +164,7 @@ async function handleNewComment(commentDocument, databases, messaging, client, l
 
     const userIds = [post.authorId];
 
-    const notificationData = {
+    const notificationData: NotificationData = {
       userIds,
       title: 'New Comment',
       body: `${commentDocument.authorName || 'Someone'} commented on your post: "${post.title || post.content?.slice(0, 50) + '...'}"`,
@@ -106,13 +173,21 @@ async function handleNewComment(commentDocument, databases, messaging, client, l
     };
 
     return await sendPushNotifications(notificationData, messaging, client, log, error, res);
-  } catch (e) {
-    error(`Error handling new comment: ${e.message}`);
-    return res.json({ ok: false, error: e.message }, 500);
+  } catch (e: unknown) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    error(`Error handling new comment: ${errorMsg}`);
+    return res.json({ ok: false, error: errorMsg }, 500);
   }
 }
 
-async function handleDirectCall(payload, messaging, client, log, error, res) {
+async function handleDirectCall(
+  payload: WebhookPayload,
+  messaging: Messaging,
+  client: Client,
+  log: (msg: string) => void,
+  error: (msg: string) => void,
+  res: { json: (data: any, status?: number) => void }
+) {
   const { userIds, title, body, postId, type } = payload;
 
   if (!userIds || !title || !body || !postId || !type) {
@@ -122,18 +197,26 @@ async function handleDirectCall(payload, messaging, client, log, error, res) {
   return await sendPushNotifications({ userIds, title, body, postId, type }, messaging, client, log, error, res);
 }
 
-async function sendPushNotifications(notificationData, messaging, client, log, error, res) {
+async function sendPushNotifications(
+  notificationData: NotificationData,
+  messaging: Messaging,
+  client: Client,
+  log: (msg: string) => void,
+  error: (msg: string) => void,
+  res: { json: (data: any, status?: number) => void }
+) {
   const { userIds, title, body, postId, type } = notificationData;
 
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
   const targets = await Promise.all(
-    userIds.map(async (userId) => {
+    userIds.map(async (userId: string) => {
       try {
         const response = await messaging.listTargets([`userId(${userId})`, `providerType(push)`]);
         return response.targets;
-      } catch (e) {
-        error(`Failed to get targets for user ${userId}: ${e.message}`);
+      } catch (e: unknown) {
+        const errorMsg = e instanceof Error ? e.message : String(e);
+        error(`Failed to get targets for user ${userId}: ${errorMsg}`);
         return [];
       }
     })
@@ -145,7 +228,7 @@ async function sendPushNotifications(notificationData, messaging, client, log, e
   }
 
   const expoPayload = {
-    to: targets.map(target => target.identifier),
+    to: targets.map((target: Models.Target) => target.identifier),
     title,
     body,
     data: { postId, type },
@@ -154,7 +237,7 @@ async function sendPushNotifications(notificationData, messaging, client, log, e
 
   log(`Expo payload: ${JSON.stringify(expoPayload)}`);
 
-  const response = await fetch('https://exp.host/--/api/v2/push/send', {
+  const response = await nodeFetch('https://exp.host/--/api/v2/push/send', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
