@@ -1,9 +1,10 @@
-import { Client, Databases, Messaging, type Models } from 'appwrite';
+import { Client, Databases, type Models } from 'appwrite';
 import nodeFetch from 'node-fetch';
 
-// Define interfaces for payloads and documents
+// Define interfaces
 interface WebhookPayload {
   events: string[];
+  document: Models.Document;
   [key: string]: any;
 }
 
@@ -28,6 +29,13 @@ interface NotificationData {
   type: 'new_post' | 'new_comment';
 }
 
+interface Target {
+  $id: string;
+  userId: string;
+  providerType: string;
+  identifier: string;
+}
+
 interface FunctionContext {
   req: {
     body: string;
@@ -43,16 +51,19 @@ interface FunctionContext {
 }
 
 module.exports = async ({ req, res, log, error }: FunctionContext) => {
-  const client = new Client();
-  client
+  const client = new Client()
     .setEndpoint('https://cloud.appwrite.io/v1')
-    .setProject(process.env.APPWRITE_PROJECT_ID)
-    [(Client.prototype as any).setKey](process.env.APPWRITE_API_KEY); // Type assertion for setKey
+    .setProject(process.env.APPWRITE_PROJECT_ID);
+
+  if (!process.env.APPWRITE_API_KEY) {
+    error('APPWRITE_API_KEY is not defined');
+    return res.json({ ok: false, error: 'APPWRITE_API_KEY is not defined' }, 500);
+  }
+  client.setKey(process.env.APPWRITE_API_KEY);
 
   log(`Client initialized with project ID: ${process.env.APPWRITE_PROJECT_ID}`);
 
   const databases = new Databases(client);
-  const messaging = new Messaging(client);
 
   try {
     log(`Environment variables: ${JSON.stringify({
@@ -67,9 +78,9 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     log(`Received webhook payload: ${JSON.stringify(webhookPayload)}`);
 
     if (webhookPayload.events && webhookPayload.events.length > 0) {
-      return await handleWebhookEvent(webhookPayload, databases, messaging, client, log, error, res);
+      return await handleWebhookEvent(webhookPayload, databases, client, log, error, res);
     } else {
-      return await handleDirectCall(webhookPayload, messaging, client, log, error, res);
+      return await handleDirectCall(webhookPayload, client, log, error, res);
     }
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
@@ -81,7 +92,6 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
 async function handleWebhookEvent(
   payload: WebhookPayload,
   databases: Databases,
-  messaging: Messaging,
   client: Client,
   log: (msg: string) => void,
   error: (msg: string) => void,
@@ -89,12 +99,12 @@ async function handleWebhookEvent(
 ) {
   const eventType = payload.events[0];
   log(`Event type received: ${eventType}`);
-  const document = payload;
+  const document = payload.document;
 
   if (eventType.includes('6896fbb2003568eb4840') && eventType.includes('create')) {
-    return await handleNewPost(document, databases, messaging, client, log, error, res);
+    return await handleNewPost(document as PostDocument, databases, client, log, error, res);
   } else if (eventType.includes('68970496002d7aff12cb') && eventType.includes('create')) {
-    return await handleNewComment(document, databases, messaging, client, log, error, res);
+    return await handleNewComment(document as CommentDocument, databases, client, log, error, res);
   } else {
     log(`Unhandled event type: ${eventType}`);
     return res.json({ ok: false, error: 'Unhandled event type' }, 400);
@@ -104,7 +114,6 @@ async function handleWebhookEvent(
 async function handleNewPost(
   postDocument: PostDocument,
   databases: Databases,
-  messaging: Messaging,
   client: Client,
   log: (msg: string) => void,
   error: (msg: string) => void,
@@ -122,7 +131,7 @@ async function handleNewPost(
 
     if (userIds.length === 0) {
       log('No users to notify for new post');
-      return res.json({ ok: true, message: 'No users to notify' });
+      return res.json({ ok: true, message: 'No users to notify' }, 200);
     }
 
     const notificationData: NotificationData = {
@@ -133,7 +142,7 @@ async function handleNewPost(
       type: 'new_post'
     };
 
-    return await sendPushNotifications(notificationData, messaging, client, log, error, res);
+    return await sendPushNotifications(notificationData, client, log, error, res);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error handling new post: ${errorMsg}`);
@@ -144,7 +153,6 @@ async function handleNewPost(
 async function handleNewComment(
   commentDocument: CommentDocument,
   databases: Databases,
-  messaging: Messaging,
   client: Client,
   log: (msg: string) => void,
   error: (msg: string) => void,
@@ -159,7 +167,7 @@ async function handleNewComment(
     
     if (post.authorId === commentDocument.userId) {
       log('Comment author is the same as post author, no notification needed');
-      return res.json({ ok: true, message: 'No notification needed - same user' });
+      return res.json({ ok: true, message: 'No notification needed - same user' }, 200);
     }
 
     const userIds = [post.authorId];
@@ -172,7 +180,7 @@ async function handleNewComment(
       type: 'new_comment'
     };
 
-    return await sendPushNotifications(notificationData, messaging, client, log, error, res);
+    return await sendPushNotifications(notificationData, client, log, error, res);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error handling new comment: ${errorMsg}`);
@@ -182,7 +190,6 @@ async function handleNewComment(
 
 async function handleDirectCall(
   payload: WebhookPayload,
-  messaging: Messaging,
   client: Client,
   log: (msg: string) => void,
   error: (msg: string) => void,
@@ -194,12 +201,11 @@ async function handleDirectCall(
     throw new Error('Missing required fields: userIds, title, body, postId, type');
   }
 
-  return await sendPushNotifications({ userIds, title, body, postId, type }, messaging, client, log, error, res);
+  return await sendPushNotifications({ userIds, title, body, postId, type }, client, log, error, res);
 }
 
 async function sendPushNotifications(
   notificationData: NotificationData,
-  messaging: Messaging,
   client: Client,
   log: (msg: string) => void,
   error: (msg: string) => void,
@@ -209,11 +215,11 @@ async function sendPushNotifications(
 
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
-  const targets = await Promise.all(
+  const targets: Target[] = await Promise.all(
     userIds.map(async (userId: string) => {
       try {
-        const response = await messaging.listTargets([`userId(${userId})`, `providerType(push)`]);
-        return response.targets;
+        const response = await client.call('GET', `/messaging/targets?queries[]=userId("${userId}")&queries[]=providerType("push")`);
+        return response.targets as Target[];
       } catch (e: unknown) {
         const errorMsg = e instanceof Error ? e.message : String(e);
         error(`Failed to get targets for user ${userId}: ${errorMsg}`);
@@ -228,7 +234,7 @@ async function sendPushNotifications(
   }
 
   const expoPayload = {
-    to: targets.map((target: Models.Target) => target.identifier),
+    to: targets.map(target => target.identifier),
     title,
     body,
     data: { postId, type },
@@ -255,5 +261,5 @@ async function sendPushNotifications(
   const result = await response.json();
   log(`Successfully sent notifications: ${JSON.stringify(result)}`);
   
-  return res.json({ ok: true, messageId: result.data?.[0]?.id, sentTo: targets.length });
+  return res.json({ ok: true, messageId: result.data?.[0]?.id, sentTo: targets.length }, 200);
 }
