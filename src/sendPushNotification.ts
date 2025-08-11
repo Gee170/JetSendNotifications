@@ -64,7 +64,7 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
   const client = new Client()
     .setEndpoint('https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
-    .setKey(process.env.APPWRITE_API_KEY);
+    [(Client.prototype as any).setKey](process.env.APPWRITE_API_KEY); // Type assertion for setKey
 
   log(`Client initialized with project ID: ${process.env.APPWRITE_PROJECT_ID}`);
 
