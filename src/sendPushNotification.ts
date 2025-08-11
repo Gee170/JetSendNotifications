@@ -223,7 +223,7 @@ async function sendPushNotifications(
   const targets: Target[] = await Promise.all(
     userIds.map(async (userId: string) => {
       try {
-        const response = await client.call('GET', `/messaging/targets?queries[]=userId("${userId}")&queries[]=providerType("push")`);
+        const response = await client.call('GET', new URL(`/messaging/targets?queries[]=userId("${userId}")&queries[]=providerType("push")`, client.config.endpoint));
         return response.targets as Target[];
       } catch (e: unknown) {
         const errorMsg = e instanceof Error ? e.message : String(e);
