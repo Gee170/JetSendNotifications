@@ -1,4 +1,4 @@
-import { Client, Databases, type Models } from 'appwrite';
+import { Client, Databases, type Models, Query } from 'appwrite';
 import nodeFetch from 'node-fetch';
 
 // Define interfaces
@@ -129,7 +129,7 @@ async function handleNewPost(
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
     const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
 
-    const users = await databases.listDocuments(databaseId, usersCollectionId, [], 100);
+    const users = await databases.listDocuments(databaseId, usersCollectionId, [Query.limit(100)]);
     const userIds = users.documents
       .map((user: Models.Document) => user.$id)
       .filter((userId: string) => userId !== postDocument.authorId);
@@ -248,7 +248,7 @@ async function sendPushNotifications(
 
   log(`Expo payload: ${JSON.stringify(expoPayload)}`);
 
-  const response = await nodeFetch('https://exp.host/--/api/v2/push/send' as string, {
+  const response = await nodeFetch(new URL('https://exp.host/--/api/v2/push/send'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
