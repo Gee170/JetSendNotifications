@@ -1,56 +1,62 @@
-import { Client, Databases, ID } from 'appwrite';
-import fetch from 'node-fetch';
+const { Client, Databases, Messaging } = require('appwrite');
+const fetch = require('node-fetch');
 
-export default async ({ req, res, log, error }) => {
+module.exports = async ({ req, res, log, error }) => {
   const client = new Client()
     .setEndpoint('https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
     .setKey(process.env.APPWRITE_API_KEY);
 
   const databases = new Databases(client);
+  const messaging = new Messaging(client);
 
   try {
+    log(`Environment variables: ${JSON.stringify({
+      APPWRITE_PROJECT_ID: process.env.APPWRITE_PROJECT_ID,
+      APPWRITE_DATABASE_ID: process.env.APPWRITE_DATABASE_ID,
+      POSTS_COLLECTION_ID: process.env.POSTS_COLLECTION_ID,
+      USERS_COLLECTION_ID: process.env.USERS_COLLECTION_ID,
+      EXPO_ACCESS_TOKEN: !!process.env.EXPO_ACCESS_TOKEN
+    })}`);
+
     const webhookPayload = JSON.parse(req.body);
     log(`Received webhook payload: ${JSON.stringify(webhookPayload)}`);
 
-    // Check if this is a webhook event
     if (webhookPayload.events && webhookPayload.events.length > 0) {
-      return await handleWebhookEvent(webhookPayload, databases, client, log, error, res);
+      return await handleWebhookEvent(webhookPayload, databases, messaging, client, log, error, res);
     } else {
-      // Handle direct function call (manual trigger)
-      return await handleDirectCall(webhookPayload, client, log, error, res);
+      return await handleDirectCall(webhookPayload, messaging, client, log, error, res);
     }
-
   } catch (e) {
     error(`Failed to process request: ${e.message}`);
     return res.json({ ok: false, error: e.message }, 500);
   }
 };
 
-async function handleWebhookEvent(payload, databases, client, log, error, res) {
+async function handleWebhookEvent(payload, databases, messaging, client, log, error, res) {
   const eventType = payload.events[0];
+  log(`Event type received: ${eventType}`);
   const document = payload;
 
-  if (eventType.includes('posts_collection') && eventType.includes('create')) {
-    return await handleNewPost(document, databases, client, log, error, res);
-  } else if (eventType.includes('comments_collection') && eventType.includes('create')) {
-    return await handleNewComment(document, databases, client, log, error, res);
+  if (eventType.includes('6896fbb2003568eb4840') && eventType.includes('create')) {
+    return await handleNewPost(document, databases, messaging, client, log, error, res);
+  } else if (eventType.includes('68970496002d7aff12cb') && eventType.includes('create')) {
+    return await handleNewComment(document, databases, messaging, client, log, error, res);
   } else {
     log(`Unhandled event type: ${eventType}`);
     return res.json({ ok: false, error: 'Unhandled event type' }, 400);
   }
 }
 
-async function handleNewPost(postDocument, databases, client, log, error, res) {
+async function handleNewPost(postDocument, databases, messaging, client, log, error, res) {
   try {
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
     const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
 
-    // Get all users to notify (you might want to add filtering logic here)
     const users = await databases.listDocuments(databaseId, usersCollectionId, [], 100);
     const userIds = users.documents
       .map(user => user.$id)
-      .filter(userId => userId !== postDocument.authorId); // Don't notify the author
+      .filter(userId => userId !== postDocument.authorId);
 
     if (userIds.length === 0) {
       log('No users to notify for new post');
@@ -65,23 +71,20 @@ async function handleNewPost(postDocument, databases, client, log, error, res) {
       type: 'new_post'
     };
 
-    return await sendPushNotifications(notificationData, client, log, error, res);
-
+    return await sendPushNotifications(notificationData, messaging, client, log, error, res);
   } catch (e) {
     error(`Error handling new post: ${e.message}`);
     return res.json({ ok: false, error: e.message }, 500);
   }
 }
 
-async function handleNewComment(commentDocument, databases, client, log, error, res) {
+async function handleNewComment(commentDocument, databases, messaging, client, log, error, res) {
   try {
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
-    const postsCollectionId = process.env.POSTS_COLLECTION_ID || 'posts_collection';
+    const postsCollectionId = process.env.POSTS_COLLECTION_ID || '6896fbb2003568eb4840';
 
-    // Get the post that was commented on
     const post = await databases.getDocument(databaseId, postsCollectionId, commentDocument.postId);
     
-    // Only notify the post author if they didn't write the comment
     if (post.authorId === commentDocument.userId) {
       log('Comment author is the same as post author, no notification needed');
       return res.json({ ok: true, message: 'No notification needed - same user' });
@@ -97,34 +100,32 @@ async function handleNewComment(commentDocument, databases, client, log, error, 
       type: 'new_comment'
     };
 
-    return await sendPushNotifications(notificationData, client, log, error, res);
-
+    return await sendPushNotifications(notificationData, messaging, client, log, error, res);
   } catch (e) {
     error(`Error handling new comment: ${e.message}`);
     return res.json({ ok: false, error: e.message }, 500);
   }
 }
 
-async function handleDirectCall(payload, client, log, error, res) {
+async function handleDirectCall(payload, messaging, client, log, error, res) {
   const { userIds, title, body, postId, type } = payload;
 
   if (!userIds || !title || !body || !postId || !type) {
     throw new Error('Missing required fields: userIds, title, body, postId, type');
   }
 
-  return await sendPushNotifications({ userIds, title, body, postId, type }, client, log, error, res);
+  return await sendPushNotifications({ userIds, title, body, postId, type }, messaging, client, log, error, res);
 }
 
-async function sendPushNotifications(notificationData, client, log, error, res) {
+async function sendPushNotifications(notificationData, messaging, client, log, error, res) {
   const { userIds, title, body, postId, type } = notificationData;
 
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
-  // Get push targets for users
   const targets = await Promise.all(
-    userIds.map(async (userId: string) => {
+    userIds.map(async (userId) => {
       try {
-        const response = await client.call('GET', `/messaging/targets?queries[]=userId("${userId}")&queries[]=providerType("push")`);
+        const response = await messaging.listTargets([`userId(${userId})`, `providerType(push)`]);
         return response.targets;
       } catch (e) {
         error(`Failed to get targets for user ${userId}: ${e.message}`);
@@ -138,7 +139,6 @@ async function sendPushNotifications(notificationData, client, log, error, res) 
     return res.json({ ok: false, error: 'No valid push targets found' }, 400);
   }
 
-  // Send push notifications via Expo API
   const expoPayload = {
     to: targets.map(target => target.identifier),
     title,
@@ -146,6 +146,8 @@ async function sendPushNotifications(notificationData, client, log, error, res) 
     data: { postId, type },
     badge: 1,
   };
+
+  log(`Expo payload: ${JSON.stringify(exoPayload)}`);
 
   const response = await fetch('https://exp.host/--/api/v2/push/send', {
     method: 'POST',
@@ -158,7 +160,8 @@ async function sendPushNotifications(notificationData, client, log, error, res) 
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Expo API error: ${errorText}`);
+    error(`Expo API error: ${errorText}`);
+    return res.json({ ok: false, error: errorText }, 500);
   }
 
   const result = await response.json();
