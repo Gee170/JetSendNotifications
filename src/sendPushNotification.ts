@@ -2,10 +2,13 @@ const { Client, Databases, Messaging } = require('appwrite');
 const fetch = require('node-fetch');
 
 module.exports = async ({ req, res, log, error }) => {
-  const client = new Client()
+  const client = new Client();
+  client
     .setEndpoint('https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
     .setKey(process.env.APPWRITE_API_KEY);
+
+  log(`Client initialized with project ID: ${process.env.APPWRITE_PROJECT_ID}`);
 
   const databases = new Databases(client);
   const messaging = new Messaging(client);
@@ -50,6 +53,7 @@ async function handleWebhookEvent(payload, databases, messaging, client, log, er
 
 async function handleNewPost(postDocument, databases, messaging, client, log, error, res) {
   try {
+    log(`Post document: ${JSON.stringify(postDocument)}`);
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
     const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
 
@@ -80,6 +84,7 @@ async function handleNewPost(postDocument, databases, messaging, client, log, er
 
 async function handleNewComment(commentDocument, databases, messaging, client, log, error, res) {
   try {
+    log(`Comment document: ${JSON.stringify(commentDocument)}`);
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
     const postsCollectionId = process.env.POSTS_COLLECTION_ID || '6896fbb2003568eb4840';
 
@@ -147,7 +152,7 @@ async function sendPushNotifications(notificationData, messaging, client, log, e
     badge: 1,
   };
 
-  log(`Expo payload: ${JSON.stringify(exoPayload)}`);
+  log(`Expo payload: ${JSON.stringify(expoPayload)}`);
 
   const response = await fetch('https://exp.host/--/api/v2/push/send', {
     method: 'POST',
