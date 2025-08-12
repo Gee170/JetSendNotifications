@@ -80,11 +80,18 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     })}`);
 
     let webhookPayload: WebhookPayload;
-    if (typeof req.body === 'string') {
-      webhookPayload = JSON.parse(req.body);
-    } else {
-      webhookPayload = req.body;
+    try {
+      if (typeof req.body === 'string') {
+        webhookPayload = JSON.parse(req.body);
+      } else if (typeof req.body === 'object' && req.body !== null) {
+        webhookPayload = req.body;
+      } else {
+        throw new Error('Invalid request body format');
+      }
+    } catch (err) {
+      throw new Error(`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`);
     }
+
     log(`Received webhook payload: ${JSON.stringify(webhookPayload)}`);
 
     if (webhookPayload.events && webhookPayload.events.length > 0) {
