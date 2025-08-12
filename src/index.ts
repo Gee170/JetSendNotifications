@@ -100,9 +100,13 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
 
     // Handle webhook events based on collection ID
     if (webhookPayload.$collectionId === process.env.POSTS_COLLECTION_ID) {
-      return await handleNewPost(webhookPayload.document as PostDocument, databases, messaging, log, error, res);
+      // For webhook events, the document data is directly in the payload
+      const documentData = webhookPayload.document || webhookPayload;
+      return await handleNewPost(documentData as PostDocument, databases, messaging, log, error, res);
     } else if (webhookPayload.$collectionId === process.env.COMMENTS_COLLECTION_ID) {
-      return await handleNewComment(webhookPayload.document as CommentDocument, databases, messaging, log, error, res);
+      // For webhook events, the document data is directly in the payload
+      const documentData = webhookPayload.document || webhookPayload;
+      return await handleNewComment(documentData as CommentDocument, databases, messaging, log, error, res);
     } else {
       // Handle direct function calls (not webhook events)
       return await handleDirectCall(webhookPayload, messaging, log, error, res);
