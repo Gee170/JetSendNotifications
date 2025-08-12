@@ -262,7 +262,7 @@ async function sendPushNotifications(
   const expoPushToken = "ExponentPushToken[2urmJODmArO240nQ1D6fZX]";
 
   const expoPayload = {
-    to: targets.map(target => target.identifier),
+    to: [expoPushToken],
     title,
     body,
     data: { postId, type },
