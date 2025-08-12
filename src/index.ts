@@ -236,74 +236,54 @@ async function sendPushNotifications(
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
   try {
-    // Option 1: Use Appwrite's new messaging API with FCM provider
-    if (process.env.USE_APPWRITE_MESSAGING === 'true') {
-      // Make sure you have configured an FCM provider in your Appwrite console
-      const messageId = ID.unique();
-      
-      const message = await messaging.createPush(
-        messageId,
-        title,
-        body,
-        [], // topics
-        userIds, // users
-        [], // targets
-        {
-          postId,
-          type
-        }, // data
-        'open_post', // action - valid action string
-        undefined, // image
-        undefined, // icon
-        undefined, // sound
-        undefined, // color
-        undefined, // tag
-        1, // badge
-        false, // draft
-        undefined // scheduledAt
-      );
-
-      log(`Successfully sent notification via Appwrite: ${JSON.stringify(message)}`);
-      return res.json({ ok: true, messageId: message.$id, sentTo: userIds.length }, 200);
-    }
+    // Use Appwrite's messaging service - it handles push tokens automatically
+    const messageId = ID.unique();
     
-    // Option 2: Continue using Expo Push Notifications directly
-    else {
-      const expoPushToken = "ExponentPushToken[2urmJODmArO240nQ1D6fZX]";
+    log(`Creating push notification with message ID: ${messageId}`);
+    
+    const message = await messaging.createPush(
+      messageId,
+      title,
+      body,
+      [], // topics
+      userIds, // users - Appwrite will find their registered push tokens automatically
+      [], // targets
+      {
+        postId,
+        type
+      }, // data
+      'open_post', // action - what happens when user taps notification
+      undefined, // image
+      undefined, // icon
+      undefined, // sound
+      undefined, // color
+      undefined, // tag
+      1, // badge
+      false, // draft
+      undefined // scheduledAt
+    );
 
-      const expoPayload = {
-        to: [expoPushToken],
-        title,
-        body,
-        data: { postId, type },
-        badge: 1,
-      };
-
-      log(`Expo payload: ${JSON.stringify(expoPayload)}`);
-
-      const response = await nodeFetch(new URL('https://exp.host/--/api/v2/push/send'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.EXPO_ACCESS_TOKEN}`,
-        },
-        body: JSON.stringify(expoPayload),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        error(`Expo API error: ${errorText}`);
-        return res.json({ ok: false, error: errorText }, 500);
-      }
-
-      const result = await response.json();
-      log(`Successfully sent notifications: ${JSON.stringify(result)}`);
-      
-      return res.json({ ok: true, messageId: result.data?.[0]?.id, sentTo: 1 }, 200);
-    }
+    log(`Successfully created notification: ${JSON.stringify(message)}`);
+    
+    // The message status will be "processing" initially
+    // Appwrite will handle delivery to all registered devices for these users
+    return res.json({ 
+      ok: true, 
+      messageId: message.$id, 
+      sentTo: userIds.length,
+      status: message.status,
+      deliveredTotal: message.deliveredTotal 
+    }, 200);
+    
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error sending push notification: ${errorMsg}`);
+    
+    // If Appwrite messaging fails, provide helpful error info
+    if (errorMsg.includes('JWT::encode') || errorMsg.includes('FCM')) {
+      error('FCM provider configuration issue detected. Please check your FCM provider setup in Appwrite console.');
+    }
+    
     return res.json({ ok: false, error: errorMsg }, 500);
   }
 }
