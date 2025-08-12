@@ -71,18 +71,15 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
   const databases = new Databases(client);
 
   try {
-    log(`Environment variables: ${JSON.stringify({
-      APPWRITE_PROJECT_ID: process.env.APPWRITE_PROJECT_ID,
-      APPWRITE_DATABASE_ID: process.env.APPWRITE_DATABASE_ID,
-      POSTS_COLLECTION_ID: process.env.POSTS_COLLECTION_ID,
-      USERS_COLLECTION_ID: process.env.USERS_COLLECTION_ID,
-      EXPO_ACCESS_TOKEN: !!process.env.EXPO_ACCESS_TOKEN
-    })}`);
+    log(`Raw req.body: ${req.body} (type: ${typeof req.body})`);
 
     let webhookPayload: WebhookPayload;
     try {
       if (typeof req.body === 'string') {
-        webhookPayload = JSON.parse(req.body);
+        // Remove extra quotes or escaping
+        const cleanedBody = req.body.replace(/^"|"$/g, '').replace(/\\"/g, '"');
+        log(`Cleaned req.body: ${cleanedBody}`);
+        webhookPayload = JSON.parse(cleanedBody);
       } else if (typeof req.body === 'object' && req.body !== null) {
         webhookPayload = req.body;
       } else {
@@ -92,7 +89,7 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
       throw new Error(`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    log(`Received webhook payload: ${JSON.stringify(webhookPayload)}`);
+    log(`Parsed webhook payload: ${JSON.stringify(webhookPayload)}`);
 
     if (webhookPayload.events && webhookPayload.events.length > 0) {
       return await handleWebhookEvent(webhookPayload, databases, client, log, error, res);
