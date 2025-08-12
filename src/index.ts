@@ -252,12 +252,12 @@ async function sendPushNotifications(
           postId,
           type
         }, // data
-        '', // action
-        '', // image
-        '', // icon
-        '', // sound
-        '', // color
-        '', // tag
+        'open_post', // action - valid action string
+        undefined, // image
+        undefined, // icon
+        undefined, // sound
+        undefined, // color
+        undefined, // tag
         1, // badge
         false, // draft
         undefined // scheduledAt
