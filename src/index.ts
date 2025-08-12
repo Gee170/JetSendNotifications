@@ -1,4 +1,4 @@
-import { Client, Databases, type Models, Query } from 'appwrite';
+import { Client, Databases, Models } from 'node-appwrite';
 import nodeFetch from 'node-fetch';
 
 // Define interfaces
