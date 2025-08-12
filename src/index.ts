@@ -281,9 +281,7 @@ async function sendPushNotifications(
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
   try {
-    // Get push tokens for the users from database
     const pushTokens = await getUserPushTokens(userIds, log, error);
-    
     if (pushTokens.length === 0) {
       log('No push tokens found for the specified users');
       return res.json({ ok: true, message: 'No push tokens found', sentTo: 0 }, 200);
@@ -291,30 +289,35 @@ async function sendPushNotifications(
 
     log(`Found ${pushTokens.length} push tokens for ${userIds.length} users`);
 
-    // Enhanced Expo Push Notification payload
+    // Optimize Cloudinary URLs for faster loading (optional)
+    const optimizedAuthorImage = authorImage ? `${authorImage}?w=100&h=100&c=fill` : null;
+    const optimizedPostImage = postImage ? `${postImage}?w=100&h=100&c=fill` : null;
+
     const expoPayload = {
       to: pushTokens,
       title,
       body,
-      data: { 
-        postId, 
+      data: {
+        postId,
         type,
         authorName,
-        authorImage, // Include user profile image URL
-        postImage, // Include post image URL
+        authorImage: optimizedAuthorImage,
+        postImage: optimizedPostImage,
         postTitle,
         commentContent,
         screen: type === 'new_post' ? 'PostDetails' : 'PostDetails',
-        params: { postId }
+        params: { postId },
       },
       badge: 1,
       sound: 'default',
       priority: 'high',
-      // Include both images in attachments for Android
+      // Android-specific image attachments
       attachments: [
-        ...(authorImage ? [{ url: authorImage, type: 'image' }] : []),
-        ...(postImage ? [{ url: postImage, type: 'image' }] : [])
-      ]
+        ...(optimizedAuthorImage ? [{ url: optimizedAuthorImage, type: 'image' }] : []),
+        ...(optimizedPostImage ? [{ url: optimizedPostImage, type: 'image' }] : []),
+      ],
+      // iOS-specific configuration
+      _contentAvailable: true, // Enable background fetch for iOS
     };
 
     log(`Enhanced Expo payload: ${JSON.stringify(expoPayload)}`);
@@ -336,19 +339,19 @@ async function sendPushNotifications(
 
     const result = await response.json();
     log(`Successfully sent enhanced notifications: ${JSON.stringify(result)}`);
-    
-    return res.json({ 
-      ok: true, 
-      messageId: result.data?.[0]?.id, 
+
+    return res.json({
+      ok: true,
+      messageId: result.data?.[0]?.id,
       sentTo: pushTokens.length,
       tokensUsed: pushTokens.length,
       notificationData: {
         title,
         body,
         authorName,
-        hasAuthorImage: !!authorImage,
-        hasPostImage: !!postImage
-      }
+        hasAuthorImage: !!optimizedAuthorImage,
+        hasPostImage: !!optimizedPostImage,
+      },
     }, 200);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
