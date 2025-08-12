@@ -14,12 +14,22 @@ interface PostDocument extends Models.Document {
   authorName?: string;
   title?: string;
   content?: string;
+  image?: string | null;
 }
 
 interface CommentDocument extends Models.Document {
   userId: string;
   authorName?: string;
   postId: string;
+  content?: string;
+}
+
+interface EnhancedNotificationData extends NotificationData {
+  authorName?: string;
+  authorImage?: string | null;
+  postImage?: string | null;
+  postTitle?: string;
+  commentContent?: string;
 }
 
 interface NotificationData {
@@ -131,6 +141,12 @@ async function handleNewPost(
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
     const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
 
+    // Get author information
+    const author = await databases.getDocument(databaseId, usersCollectionId, postDocument.authorId);
+    const authorName = author.name || 'Someone';
+    const authorImage = author.image || null;
+
+    // Get all users except the post author
     const users = await databases.listDocuments(databaseId, usersCollectionId, [Query.limit(100)]);
     const userIds = users.documents
       .map((user: Models.Document) => user.$id)
@@ -141,12 +157,33 @@ async function handleNewPost(
       return res.json({ ok: true, message: 'No users to notify' }, 200);
     }
 
-    const notificationData: NotificationData = {
+    // Create rich notification content
+    const title = '📝 New Post';
+    let body = `${authorName} shared a new post`;
+    
+    if (postDocument.title) {
+      body += `: "${postDocument.title}"`;
+    } else if (postDocument.content) {
+      const preview = postDocument.content.length > 60 
+        ? postDocument.content.slice(0, 60) + '...' 
+        : postDocument.content;
+      body += `: "${preview}"`;
+    }
+
+    if (postDocument.image) {
+      body += ' 📷';
+    }
+
+    const notificationData: EnhancedNotificationData = {
       userIds,
-      title: 'New Post',
-      body: `New post by ${postDocument.authorName || 'Someone'}: ${postDocument.title || postDocument.content?.slice(0, 50) + '...'}`,
+      title,
+      body,
       postId: postDocument.$id,
-      type: 'new_post'
+      type: 'new_post',
+      authorName,
+      authorImage,
+      postImage: postDocument.image,
+      postTitle: postDocument.title
     };
 
     return await sendPushNotifications(notificationData, messaging, log, error, res);
@@ -169,8 +206,13 @@ async function handleNewComment(
     log(`Comment document: ${JSON.stringify(commentDocument)}`);
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
     const postsCollectionId = process.env.POSTS_COLLECTION_ID || '6896fbb2003568eb4840';
+    const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
 
-    const post = await databases.getDocument(databaseId, postsCollectionId, commentDocument.postId);
+    // Get the post and commenter information
+    const [post, commenter] = await Promise.all([
+      databases.getDocument(databaseId, postsCollectionId, commentDocument.postId),
+      databases.getDocument(databaseId, usersCollectionId, commentDocument.userId)
+    ]);
     
     if (post.authorId === commentDocument.userId) {
       log('Comment author is the same as post author, no notification needed');
@@ -178,13 +220,33 @@ async function handleNewComment(
     }
 
     const userIds = [post.authorId];
+    const commenterName = commenter.name || 'Someone';
+    const commenterImage = commenter.image || null;
 
-    const notificationData: NotificationData = {
+    // Create rich notification content
+    const title = '💬 New Comment';
+    let body = `${commenterName} commented on your post`;
+    
+    if (post.title) {
+      body += `: "${post.title}"`;
+    } else if (post.content) {
+      const preview = post.content.length > 40 
+        ? post.content.slice(0, 40) + '...' 
+        : post.content;
+      body += `: "${preview}"`;
+    }
+
+    const notificationData: EnhancedNotificationData = {
       userIds,
-      title: 'New Comment',
-      body: `${commentDocument.authorName || 'Someone'} commented on your post: "${post.title || post.content?.slice(0, 50) + '...'}"`,
+      title,
+      body,
       postId: commentDocument.postId,
-      type: 'new_comment'
+      type: 'new_comment',
+      authorName: commenterName,
+      authorImage: commenterImage,
+      postImage: post.image,
+      postTitle: post.title,
+      commentContent: commentDocument.content
     };
 
     return await sendPushNotifications(notificationData, messaging, log, error, res);
@@ -212,13 +274,13 @@ async function handleDirectCall(
 }
 
 async function sendPushNotifications(
-  notificationData: NotificationData,
+  notificationData: EnhancedNotificationData,
   messaging: Messaging,
   log: (msg: string) => void,
   error: (msg: string) => void,
   res: { json: (data: any, status?: number) => void }
 ) {
-  const { userIds, title, body, postId, type } = notificationData;
+  const { userIds, title, body, postId, type, authorName, authorImage, postImage, postTitle, commentContent } = notificationData;
 
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
@@ -233,16 +295,37 @@ async function sendPushNotifications(
 
     log(`Found ${pushTokens.length} push tokens for ${userIds.length} users`);
 
-    // Use Expo Push Notifications with dynamic tokens
+    // Enhanced Expo Push Notification payload
     const expoPayload = {
       to: pushTokens,
       title,
       body,
-      data: { postId, type },
+      data: { 
+        postId, 
+        type,
+        authorName,
+        authorImage,
+        postImage,
+        postTitle,
+        commentContent,
+        // Add screen navigation data for your Expo app
+        screen: type === 'new_post' ? 'PostDetails' : 'PostDetails',
+        params: { postId }
+      },
       badge: 1,
+      // Enhanced notification appearance
+      sound: 'default',
+      priority: 'high',
+      // For Android rich notifications
+      ...(postImage && {
+        attachments: [{
+          url: postImage,
+          type: 'image'
+        }]
+      })
     };
 
-    log(`Expo payload: ${JSON.stringify(expoPayload)}`);
+    log(`Enhanced Expo payload: ${JSON.stringify(expoPayload)}`);
 
     const response = await nodeFetch(new URL('https://exp.host/--/api/v2/push/send'), {
       method: 'POST',
@@ -260,13 +343,19 @@ async function sendPushNotifications(
     }
 
     const result = await response.json();
-    log(`Successfully sent notifications: ${JSON.stringify(result)}`);
+    log(`Successfully sent enhanced notifications: ${JSON.stringify(result)}`);
     
     return res.json({ 
       ok: true, 
       messageId: result.data?.[0]?.id, 
       sentTo: pushTokens.length,
-      tokensUsed: pushTokens.length 
+      tokensUsed: pushTokens.length,
+      notificationData: {
+        title,
+        body,
+        authorName,
+        hasImage: !!postImage
+      }
     }, 200);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
