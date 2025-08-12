@@ -97,8 +97,8 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
 
     log(`Parsed webhook payload: ${JSON.stringify(webhookPayload)}`);
 
-    if (webhookPayload.events && webhookPayload.events.length > 0) {
-      return await handleWebhookEvent(webhookPayload, databases, messaging, log, error, res);
+    if (webhookPayload.$collectionId === process.env.COMMENTS_COLLECTION_ID) {
+    return await handleNewComment(webhookPayload as CommentDocument, databases, messaging, log, error, res);
     } else {
       return await handleDirectCall(webhookPayload, messaging, log, error, res);
     }
