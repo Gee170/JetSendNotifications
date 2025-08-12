@@ -89,7 +89,9 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
             title: "Test Notification",
             body: cleanedBody,
             postId: "6897373f0013ebd5a0c6",
-            type: "new_post"
+            type: "new_post",
+            events: [], // Add default empty events array
+            document: {} as Models.Document // Add default empty document
           };
         }
       } else if (typeof req.body === 'object' && req.body !== null) {
