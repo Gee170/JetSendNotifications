@@ -1,4 +1,4 @@
-import { Client, Databases, Models, Query } from 'node-appwrite';
+import { Client, Databases, Models, Query, Messaging, ID } from 'node-appwrite';
 import nodeFetch from 'node-fetch';
 
 // Define interfaces
@@ -29,13 +29,6 @@ interface NotificationData {
   type: 'new_post' | 'new_comment';
 }
 
-interface Target {
-  $id: string;
-  userId: string;
-  providerType: string;
-  identifier: string;
-}
-
 interface FunctionContext {
   req: {
     body: string;
@@ -64,11 +57,12 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
   const client = new Client()
     .setEndpoint('https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
-    .setKey(process.env.APPWRITE_API_KEY); // Use setKey instead of setJWT
+    .setKey(process.env.APPWRITE_API_KEY);
 
   log(`Client initialized with project ID: ${process.env.APPWRITE_PROJECT_ID}`);
 
   const databases = new Databases(client);
+  const messaging = new Messaging(client);
 
   try {
     log(`Raw req.body: ${req.body} (type: ${typeof req.body})`);
@@ -104,9 +98,9 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     log(`Parsed webhook payload: ${JSON.stringify(webhookPayload)}`);
 
     if (webhookPayload.events && webhookPayload.events.length > 0) {
-      return await handleWebhookEvent(webhookPayload, databases, client, log, error, res);
+      return await handleWebhookEvent(webhookPayload, databases, messaging, log, error, res);
     } else {
-      return await handleDirectCall(webhookPayload, client, log, error, res);
+      return await handleDirectCall(webhookPayload, messaging, log, error, res);
     }
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
@@ -118,7 +112,7 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
 async function handleWebhookEvent(
   payload: WebhookPayload,
   databases: Databases,
-  client: Client,
+  messaging: Messaging,
   log: (msg: string) => void,
   error: (msg: string) => void,
   res: { json: (data: any, status?: number) => void }
@@ -128,9 +122,9 @@ async function handleWebhookEvent(
   const document = payload.document;
 
   if (eventType.includes('6896fbb2003568eb4840') && eventType.includes('create')) {
-    return await handleNewPost(document as PostDocument, databases, client, log, error, res);
+    return await handleNewPost(document as PostDocument, databases, messaging, log, error, res);
   } else if (eventType.includes('68970496002d7aff12cb') && eventType.includes('create')) {
-    return await handleNewComment(document as CommentDocument, databases, client, log, error, res);
+    return await handleNewComment(document as CommentDocument, databases, messaging, log, error, res);
   } else {
     log(`Unhandled event type: ${eventType}`);
     return res.json({ ok: false, error: 'Unhandled event type' }, 400);
@@ -140,7 +134,7 @@ async function handleWebhookEvent(
 async function handleNewPost(
   postDocument: PostDocument,
   databases: Databases,
-  client: Client,
+  messaging: Messaging,
   log: (msg: string) => void,
   error: (msg: string) => void,
   res: { json: (data: any, status?: number) => void }
@@ -168,7 +162,7 @@ async function handleNewPost(
       type: 'new_post'
     };
 
-    return await sendPushNotifications(notificationData, client, log, error, res);
+    return await sendPushNotifications(notificationData, messaging, log, error, res);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error handling new post: ${errorMsg}`);
@@ -179,7 +173,7 @@ async function handleNewPost(
 async function handleNewComment(
   commentDocument: CommentDocument,
   databases: Databases,
-  client: Client,
+  messaging: Messaging,
   log: (msg: string) => void,
   error: (msg: string) => void,
   res: { json: (data: any, status?: number) => void }
@@ -206,7 +200,7 @@ async function handleNewComment(
       type: 'new_comment'
     };
 
-    return await sendPushNotifications(notificationData, client, log, error, res);
+    return await sendPushNotifications(notificationData, messaging, log, error, res);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error handling new comment: ${errorMsg}`);
@@ -216,7 +210,7 @@ async function handleNewComment(
 
 async function handleDirectCall(
   payload: WebhookPayload,
-  client: Client,
+  messaging: Messaging,
   log: (msg: string) => void,
   error: (msg: string) => void,
   res: { json: (data: any, status?: number) => void }
@@ -227,12 +221,12 @@ async function handleDirectCall(
     throw new Error('Missing required fields: userIds, title, body, postId, type');
   }
 
-  return await sendPushNotifications({ userIds, title, body, postId, type }, client, log, error, res);
+  return await sendPushNotifications({ userIds, title, body, postId, type }, messaging, log, error, res);
 }
 
 async function sendPushNotifications(
   notificationData: NotificationData,
-  client: Client,
+  messaging: Messaging,
   log: (msg: string) => void,
   error: (msg: string) => void,
   res: { json: (data: any, status?: number) => void }
@@ -241,53 +235,75 @@ async function sendPushNotifications(
 
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
-  // const targets: Target[] = await Promise.all(
-  //   userIds.map(async (userId: string) => {
-  //     try {
-  //       const response = await client.call('GET', new URL(`/messaging/targets?queries[]=userId("${userId}")&queries[]=providerType("push")`, client.config.endpoint));
-  //       return response.targets as Target[];
-  //     } catch (e: unknown) {
-  //       const errorMsg = e instanceof Error ? e.message : String(e);
-  //       error(`Failed to get targets for user ${userId}: ${errorMsg}`);
-  //       return [];
-  //     }
-  //   })
-  // ).then(results => results.flat());
+  try {
+    // Option 1: Use Appwrite's new messaging API with FCM provider
+    if (process.env.USE_APPWRITE_MESSAGING === 'true') {
+      // Make sure you have configured an FCM provider in your Appwrite console
+      const messageId = ID.unique();
+      
+      const message = await messaging.createPush(
+        messageId,
+        title,
+        body,
+        [], // topics
+        userIds, // users
+        [], // targets
+        {
+          postId,
+          type
+        }, // data
+        '', // action
+        '', // image
+        '', // icon
+        '', // sound
+        '', // color
+        '', // tag
+        1, // badge
+        false, // draft
+        undefined // scheduledAt
+      );
 
-  // if (!targets.length) {
-  //   error('No valid push targets found');
-  //   return res.json({ ok: false, error: 'No valid push targets found' }, 400);
-  // }
+      log(`Successfully sent notification via Appwrite: ${JSON.stringify(message)}`);
+      return res.json({ ok: true, messageId: message.$id, sentTo: userIds.length }, 200);
+    }
+    
+    // Option 2: Continue using Expo Push Notifications directly
+    else {
+      const expoPushToken = "ExponentPushToken[2urmJODmArO240nQ1D6fZX]";
 
-  const expoPushToken = "ExponentPushToken[2urmJODmArO240nQ1D6fZX]";
+      const expoPayload = {
+        to: [expoPushToken],
+        title,
+        body,
+        data: { postId, type },
+        badge: 1,
+      };
 
-  const expoPayload = {
-    to: [expoPushToken],
-    title,
-    body,
-    data: { postId, type },
-    badge: 1,
-  };
+      log(`Expo payload: ${JSON.stringify(expoPayload)}`);
 
-  log(`Expo payload: ${JSON.stringify(expoPayload)}`);
+      const response = await nodeFetch(new URL('https://exp.host/--/api/v2/push/send'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.EXPO_ACCESS_TOKEN}`,
+        },
+        body: JSON.stringify(expoPayload),
+      });
 
-  const response = await nodeFetch(new URL('https://exp.host/--/api/v2/push/send'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.EXPO_ACCESS_TOKEN}`,
-    },
-    body: JSON.stringify(expoPayload),
-  });
+      if (!response.ok) {
+        const errorText = await response.text();
+        error(`Expo API error: ${errorText}`);
+        return res.json({ ok: false, error: errorText }, 500);
+      }
 
- if (!response.ok) {
-    const errorText = await response.text();
-    error(`Expo API error: ${errorText}`);
-    return res.json({ ok: false, error: errorText }, 500);
+      const result = await response.json();
+      log(`Successfully sent notifications: ${JSON.stringify(result)}`);
+      
+      return res.json({ ok: true, messageId: result.data?.[0]?.id, sentTo: 1 }, 200);
+    }
+  } catch (e: unknown) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    error(`Error sending push notification: ${errorMsg}`);
+    return res.json({ ok: false, error: errorMsg }, 500);
   }
-
-  const result = await response.json();
-  log(`Successfully sent notifications: ${JSON.stringify(result)}`);
-  
-  return res.json({ ok: true, messageId: result.data?.[0]?.id, sentTo: 1 }, 200);
 }
