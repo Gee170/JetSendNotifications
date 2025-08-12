@@ -158,7 +158,7 @@ async function handleNewPost(
     }
 
     // Create rich notification content
-    const title = '📝 New Post';
+    const title = 'New Post'; // Removed 📝 emoji
     let body = `${authorName} shared a new post`;
     
     if (postDocument.title) {
@@ -170,10 +170,6 @@ async function handleNewPost(
       body += `: "${preview}"`;
     }
 
-    if (postDocument.image) {
-      body += ' 📷';
-    }
-
     const notificationData: EnhancedNotificationData = {
       userIds,
       title,
@@ -181,8 +177,8 @@ async function handleNewPost(
       postId: postDocument.$id,
       type: 'new_post',
       authorName,
-      authorImage,
-      postImage: postDocument.image,
+      authorImage, // Cloudinary URL for user profile image
+      postImage: postDocument.image, // Cloudinary URL for post image
       postTitle: postDocument.title
     };
 
@@ -224,7 +220,7 @@ async function handleNewComment(
     const commenterImage = commenter.image || null;
 
     // Create rich notification content
-    const title = '💬 New Comment';
+    const title = 'New Comment'; // Removed 💬 emoji
     let body = `${commenterName} commented on your post`;
     
     if (post.title) {
@@ -243,8 +239,8 @@ async function handleNewComment(
       postId: commentDocument.postId,
       type: 'new_comment',
       authorName: commenterName,
-      authorImage: commenterImage,
-      postImage: post.image,
+      authorImage: commenterImage, // Cloudinary URL for commenter profile image
+      postImage: post.image, // Cloudinary URL for post image
       postTitle: post.title,
       commentContent: commentDocument.content
     };
@@ -304,25 +300,21 @@ async function sendPushNotifications(
         postId, 
         type,
         authorName,
-        authorImage,
-        postImage,
+        authorImage, // Include user profile image URL
+        postImage, // Include post image URL
         postTitle,
         commentContent,
-        // Add screen navigation data for your Expo app
         screen: type === 'new_post' ? 'PostDetails' : 'PostDetails',
         params: { postId }
       },
       badge: 1,
-      // Enhanced notification appearance
       sound: 'default',
       priority: 'high',
-      // For Android rich notifications
-      ...(postImage && {
-        attachments: [{
-          url: postImage,
-          type: 'image'
-        }]
-      })
+      // Include both images in attachments for Android
+      attachments: [
+        ...(authorImage ? [{ url: authorImage, type: 'image' }] : []),
+        ...(postImage ? [{ url: postImage, type: 'image' }] : [])
+      ]
     };
 
     log(`Enhanced Expo payload: ${JSON.stringify(expoPayload)}`);
@@ -354,7 +346,8 @@ async function sendPushNotifications(
         title,
         body,
         authorName,
-        hasImage: !!postImage
+        hasAuthorImage: !!authorImage,
+        hasPostImage: !!postImage
       }
     }, 200);
   } catch (e: unknown) {
