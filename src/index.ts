@@ -64,7 +64,7 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
   const client = new Client()
     .setEndpoint('https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
-    .setJWT(process.env.APPWRITE_API_KEY);
+    .setKey(process.env.APPWRITE_API_KEY); // Use setKey instead of setJWT
 
   log(`Client initialized with project ID: ${process.env.APPWRITE_PROJECT_ID}`);
 
@@ -76,13 +76,11 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     let webhookPayload: WebhookPayload;
     try {
       if (typeof req.body === 'string') {
-        // Try parsing as JSON
         const cleanedBody = req.body.replace(/^"|"$/g, '').replace(/\\"/g, '"');
         log(`Cleaned req.body: ${cleanedBody}`);
         try {
           webhookPayload = JSON.parse(cleanedBody);
         } catch (err) {
-          // If parsing fails, assume req.body is the 'body' field and construct payload
           log(`Failed to parse req.body as JSON, constructing payload manually`);
           webhookPayload = {
             userIds: ["6899b68b00337f047f35"],
@@ -90,8 +88,8 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
             body: cleanedBody,
             postId: "6897373f0013ebd5a0c6",
             type: "new_post",
-            events: [], // Add default empty events array
-            document: {} as Models.Document // Add default empty document
+            events: [],
+            document: {} as Models.Document
           };
         }
       } else if (typeof req.body === 'object' && req.body !== null) {
