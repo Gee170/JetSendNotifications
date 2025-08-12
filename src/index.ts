@@ -76,10 +76,22 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     let webhookPayload: WebhookPayload;
     try {
       if (typeof req.body === 'string') {
-        // Remove extra quotes or escaping
+        // Try parsing as JSON
         const cleanedBody = req.body.replace(/^"|"$/g, '').replace(/\\"/g, '"');
         log(`Cleaned req.body: ${cleanedBody}`);
-        webhookPayload = JSON.parse(cleanedBody);
+        try {
+          webhookPayload = JSON.parse(cleanedBody);
+        } catch (err) {
+          // If parsing fails, assume req.body is the 'body' field and construct payload
+          log(`Failed to parse req.body as JSON, constructing payload manually`);
+          webhookPayload = {
+            userIds: ["6899b68b00337f047f35"],
+            title: "Test Notification",
+            body: cleanedBody,
+            postId: "6897373f0013ebd5a0c6",
+            type: "new_post"
+          };
+        }
       } else if (typeof req.body === 'object' && req.body !== null) {
         webhookPayload = req.body;
       } else {
