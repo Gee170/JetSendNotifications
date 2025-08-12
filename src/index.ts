@@ -241,23 +241,25 @@ async function sendPushNotifications(
 
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
-  const targets: Target[] = await Promise.all(
-    userIds.map(async (userId: string) => {
-      try {
-        const response = await client.call('GET', new URL(`/messaging/targets?queries[]=userId("${userId}")&queries[]=providerType("push")`, client.config.endpoint));
-        return response.targets as Target[];
-      } catch (e: unknown) {
-        const errorMsg = e instanceof Error ? e.message : String(e);
-        error(`Failed to get targets for user ${userId}: ${errorMsg}`);
-        return [];
-      }
-    })
-  ).then(results => results.flat());
+  // const targets: Target[] = await Promise.all(
+  //   userIds.map(async (userId: string) => {
+  //     try {
+  //       const response = await client.call('GET', new URL(`/messaging/targets?queries[]=userId("${userId}")&queries[]=providerType("push")`, client.config.endpoint));
+  //       return response.targets as Target[];
+  //     } catch (e: unknown) {
+  //       const errorMsg = e instanceof Error ? e.message : String(e);
+  //       error(`Failed to get targets for user ${userId}: ${errorMsg}`);
+  //       return [];
+  //     }
+  //   })
+  // ).then(results => results.flat());
 
-  if (!targets.length) {
-    error('No valid push targets found');
-    return res.json({ ok: false, error: 'No valid push targets found' }, 400);
-  }
+  // if (!targets.length) {
+  //   error('No valid push targets found');
+  //   return res.json({ ok: false, error: 'No valid push targets found' }, 400);
+  // }
+
+  const expoPushToken = "ExponentPushToken[2urmJODmArO240nQ1D6fZX]";
 
   const expoPayload = {
     to: targets.map(target => target.identifier),
