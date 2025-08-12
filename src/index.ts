@@ -280,7 +280,7 @@ async function sendPushNotifications(
     body: JSON.stringify(expoPayload),
   });
 
-  if (!response.ok) {
+ if (!response.ok) {
     const errorText = await response.text();
     error(`Expo API error: ${errorText}`);
     return res.json({ ok: false, error: errorText }, 500);
@@ -289,5 +289,5 @@ async function sendPushNotifications(
   const result = await response.json();
   log(`Successfully sent notifications: ${JSON.stringify(result)}`);
   
-  return res.json({ ok: true, messageId: result.data?.[0]?.id, sentTo: targets.length }, 200);
+  return res.json({ ok: true, messageId: result.data?.[0]?.id, sentTo: 1 }, 200);
 }
