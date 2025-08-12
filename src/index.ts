@@ -236,54 +236,121 @@ async function sendPushNotifications(
   log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
 
   try {
-    // Use Appwrite's messaging service - it handles push tokens automatically
-    const messageId = ID.unique();
+    // Get push tokens for the users from database
+    const pushTokens = await getUserPushTokens(userIds, log, error);
     
-    log(`Creating push notification with message ID: ${messageId}`);
-    
-    const message = await messaging.createPush(
-      messageId,
+    if (pushTokens.length === 0) {
+      log('No push tokens found for the specified users');
+      return res.json({ ok: true, message: 'No push tokens found', sentTo: 0 }, 200);
+    }
+
+    log(`Found ${pushTokens.length} push tokens for ${userIds.length} users`);
+
+    // Use Expo Push Notifications with dynamic tokens
+    const expoPayload = {
+      to: pushTokens,
       title,
       body,
-      [], // topics
-      userIds, // users - Appwrite will find their registered push tokens automatically
-      [], // targets
-      {
-        postId,
-        type
-      }, // data
-      'open_post', // action - what happens when user taps notification
-      undefined, // image
-      undefined, // icon
-      undefined, // sound
-      undefined, // color
-      undefined, // tag
-      1, // badge
-      false, // draft
-      undefined // scheduledAt
-    );
+      data: { postId, type },
+      badge: 1,
+    };
 
-    log(`Successfully created notification: ${JSON.stringify(message)}`);
+    log(`Expo payload: ${JSON.stringify(expoPayload)}`);
+
+    const response = await nodeFetch(new URL('https://exp.host/--/api/v2/push/send'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.EXPO_ACCESS_TOKEN}`,
+      },
+      body: JSON.stringify(expoPayload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      error(`Expo API error: ${errorText}`);
+      return res.json({ ok: false, error: errorText }, 500);
+    }
+
+    const result = await response.json();
+    log(`Successfully sent notifications: ${JSON.stringify(result)}`);
     
-    // The message status will be "processing" initially
-    // Appwrite will handle delivery to all registered devices for these users
     return res.json({ 
       ok: true, 
-      messageId: message.$id, 
-      sentTo: userIds.length,
-      status: message.status,
-      deliveredTotal: message.deliveredTotal 
+      messageId: result.data?.[0]?.id, 
+      sentTo: pushTokens.length,
+      tokensUsed: pushTokens.length 
     }, 200);
-    
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error sending push notification: ${errorMsg}`);
-    
-    // If Appwrite messaging fails, provide helpful error info
-    if (errorMsg.includes('JWT::encode') || errorMsg.includes('FCM')) {
-      error('FCM provider configuration issue detected. Please check your FCM provider setup in Appwrite console.');
-    }
-    
     return res.json({ ok: false, error: errorMsg }, 500);
+  }
+}
+
+async function getUserPushTokens(
+  userIds: string[],
+  log: (msg: string) => void,
+  error: (msg: string) => void
+): Promise<string[]> {
+  try {
+    // Initialize client and database for getting push tokens
+    const client = new Client()
+      .setEndpoint('https://cloud.appwrite.io/v1')
+      .setProject(process.env.APPWRITE_PROJECT_ID!)
+      .setKey(process.env.APPWRITE_API_KEY!);
+
+    const databases = new Databases(client);
+    const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
+    
+    // You can either store push tokens in:
+    // Option 1: A separate pushTokens collection
+    // Option 2: As a field in your users collection
+    
+    // Option 1: Using a separate pushTokens collection (recommended)
+    const pushTokensCollectionId = process.env.PUSH_TOKENS_COLLECTION_ID || 'push_tokens';
+    
+    try {
+      const pushTokenDocs = await databases.listDocuments(
+        databaseId, 
+        pushTokensCollectionId, 
+        [
+          Query.contains('userId', userIds),
+          Query.limit(100)
+        ]
+      );
+
+      const tokens = pushTokenDocs.documents
+        .map((doc: any) => doc.pushToken)
+        .filter((token: string) => token && token.trim() !== '');
+
+      log(`Found ${tokens.length} push tokens from pushTokens collection`);
+      return tokens;
+    } catch (pushTokenError) {
+      log(`PushTokens collection not found, trying users collection...`);
+      
+      // Option 2: Fallback to users collection with pushToken field
+      const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
+      
+      const userDocs = await databases.listDocuments(
+        databaseId,
+        usersCollectionId,
+        [
+          Query.contains('$id', userIds),
+          Query.limit(100)
+        ]
+      );
+
+      const tokens = userDocs.documents
+        .map((user: any) => user.pushToken || user.expoPushToken)
+        .filter((token: string) => token && token.trim() !== '');
+
+      log(`Found ${tokens.length} push tokens from users collection`);
+      return tokens;
+    }
+  } catch (e: unknown) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    error(`Error fetching push tokens: ${errorMsg}`);
+    return [];
   }
 }
