@@ -96,6 +96,8 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     }
 
     log(`Parsed webhook payload: ${JSON.stringify(webhookPayload)}`);
+    log(webhookPayload.$collectionId)
+    log(process.env.COMMENTS_COLLECTION_ID)
 
     if (webhookPayload.$collectionId === process.env.COMMENTS_COLLECTION_ID) {
       return await handleNewComment(webhookPayload as unknown as CommentDocument, databases, messaging, log, error, res);
