@@ -5,6 +5,7 @@ import nodeFetch from 'node-fetch';
 interface WebhookPayload {
   events: string[];
   document: Models.Document;
+  $collectionId?: string;
   [key: string]: any;
 }
 
@@ -97,9 +98,13 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
 
     log(`Parsed webhook payload: ${JSON.stringify(webhookPayload)}`);
 
-    if (webhookPayload.$collectionId === process.env.COMMENTS_COLLECTION_ID || process.env.POSTS_COLLECTION_ID) {
-      return await handleNewComment(webhookPayload as unknown as CommentDocument, databases, messaging, log, error, res);
+    // Handle webhook events based on collection ID
+    if (webhookPayload.$collectionId === process.env.POSTS_COLLECTION_ID) {
+      return await handleNewPost(webhookPayload.document as PostDocument, databases, messaging, log, error, res);
+    } else if (webhookPayload.$collectionId === process.env.COMMENTS_COLLECTION_ID) {
+      return await handleNewComment(webhookPayload.document as CommentDocument, databases, messaging, log, error, res);
     } else {
+      // Handle direct function calls (not webhook events)
       return await handleDirectCall(webhookPayload, messaging, log, error, res);
     }
   } catch (e: unknown) {
@@ -108,28 +113,6 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     return res.json({ ok: false, error: errorMsg }, 500);
   }
 };
-
-async function handleWebhookEvent(
-  payload: WebhookPayload,
-  databases: Databases,
-  messaging: Messaging,
-  log: (msg: string) => void,
-  error: (msg: string) => void,
-  res: { json: (data: any, status?: number) => void }
-) {
-  const eventType = payload.events[0];
-  log(`Event type received: ${eventType}`);
-  const document = payload.document;
-
-  if (eventType.includes('6896fbb2003568eb4840') && eventType.includes('create')) {
-    return await handleNewPost(document as PostDocument, databases, messaging, log, error, res);
-  } else if (eventType.includes('68970496002d7aff12cb') && eventType.includes('create')) {
-    return await handleNewComment(document as CommentDocument, databases, messaging, log, error, res);
-  } else {
-    log(`Unhandled event type: ${eventType}`);
-    return res.json({ ok: false, error: 'Unhandled event type' }, 400);
-  }
-}
 
 async function handleNewPost(
   postDocument: PostDocument,
