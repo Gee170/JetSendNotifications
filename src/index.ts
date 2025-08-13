@@ -65,6 +65,11 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     return res.json({ ok: false, error: 'APPWRITE_API_KEY is not defined' }, 500);
   }
 
+  if (!process.env.EXPO_ACCESS_TOKEN) {
+    error('EXPO_ACCESS_TOKEN is not defined');
+    return res.json({ ok: false, error: 'EXPO_ACCESS_TOKEN is not defined' }, 500);
+  }
+
   const client = new Client()
     .setEndpoint('https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
@@ -158,7 +163,7 @@ async function handleNewPost(
     }
 
     // Create rich notification content
-    const title = 'New Post'; // Removed 📝 emoji
+    const title = 'New Post';
     let body = `${authorName} shared a new post`;
     
     if (postDocument.title) {
@@ -177,8 +182,8 @@ async function handleNewPost(
       postId: postDocument.$id,
       type: 'new_post',
       authorName,
-      authorImage, // Cloudinary URL for user profile image
-      postImage: postDocument.image, // Cloudinary URL for post image
+      authorImage,
+      postImage: postDocument.image,
       postTitle: postDocument.title
     };
 
@@ -220,7 +225,7 @@ async function handleNewComment(
     const commenterImage = commenter.image || null;
 
     // Create rich notification content
-    const title = 'New Comment'; // Removed 💬 emoji
+    const title = 'New Comment';
     let body = `${commenterName} commented on your post`;
     
     if (post.title) {
@@ -239,8 +244,8 @@ async function handleNewComment(
       postId: commentDocument.postId,
       type: 'new_comment',
       authorName: commenterName,
-      authorImage: commenterImage, // Cloudinary URL for commenter profile image
-      postImage: post.image, // Cloudinary URL for post image
+      authorImage: commenterImage,
+      postImage: post.image,
       postTitle: post.title,
       commentContent: commentDocument.content
     };
@@ -289,10 +294,7 @@ async function sendPushNotifications(
 
     log(`Found ${pushTokens.length} push tokens for ${userIds.length} users`);
 
-    // Optimize Cloudinary URLs for faster loading (optional)
-    const optimizedAuthorImage = authorImage ? `${authorImage}?w=100&h=100&c=fill` : null;
-    const optimizedPostImage = postImage ? `${postImage}?w=100&h=100&c=fill` : null;
-
+    // Create enhanced Expo payload with better Android support
     const expoPayload = {
       to: pushTokens,
       title,
@@ -301,57 +303,107 @@ async function sendPushNotifications(
         postId,
         type,
         authorName,
-        authorImage: optimizedAuthorImage,
-        postImage: optimizedPostImage,
+        authorImage,
+        postImage,
         postTitle,
         commentContent,
-        screen: type === 'new_post' ? 'PostDetails' : 'PostDetails',
+        screen: 'PostDetails',
         params: { postId },
+        // Add timestamp for uniqueness
+        timestamp: Date.now(),
       },
+      // Android specific configuration
+      android: {
+        channelId: 'posts', // Use the channel we created
+        priority: 'high',
+        sound: 'default',
+        vibrate: [0, 250, 250, 250],
+        // Enable notification images for Android
+        ...(authorImage && {
+          largeIcon: authorImage,
+        }),
+        ...(postImage && {
+          bigPicture: postImage,
+        }),
+        // Android notification style
+        style: postImage ? 'bigPicture' : 'bigText',
+        color: '#007AFF', // Your app's primary color
+      },
+      // iOS specific configuration
+      ios: {
+        sound: 'default',
+        badge: 1,
+        // iOS doesn't support images in notifications natively
+        // but we can include them in data for custom handling
+      },
+      // General configuration
       badge: 1,
       sound: 'default',
       priority: 'high',
-      // Android-specific image attachments
-      attachments: [
-        ...(optimizedAuthorImage ? [{ url: optimizedAuthorImage, type: 'image' }] : []),
-        ...(optimizedPostImage ? [{ url: optimizedPostImage, type: 'image' }] : []),
-      ],
-      // iOS-specific configuration
-      _contentAvailable: true, // Enable background fetch for iOS
+      // Content available for background processing
+      contentAvailable: true,
+      // Mutable content for rich notifications (iOS)
+      mutableContent: true,
     };
 
-    log(`Enhanced Expo payload: ${JSON.stringify(expoPayload)}`);
+    log(`Enhanced Expo payload: ${JSON.stringify(expoPayload, null, 2)}`);
 
-    const response = await nodeFetch(new URL('https://exp.host/--/api/v2/push/send'), {
+    const response = await nodeFetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: {
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${process.env.EXPO_ACCESS_TOKEN}`,
       },
       body: JSON.stringify(expoPayload),
     });
 
+    const responseText = await response.text();
+    log(`Expo API response status: ${response.status}`);
+    log(`Expo API response: ${responseText}`);
+
     if (!response.ok) {
-      const errorText = await response.text();
-      error(`Expo API error: ${errorText}`);
-      return res.json({ ok: false, error: errorText }, 500);
+      error(`Expo API error: ${response.status} - ${responseText}`);
+      return res.json({ 
+        ok: false, 
+        error: `Expo API error: ${response.status} - ${responseText}`,
+        status: response.status 
+      }, 500);
     }
 
-    const result = await response.json();
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      log(`Failed to parse response as JSON: ${parseError}`);
+      result = { data: [{ status: 'ok' }] };
+    }
+
     log(`Successfully sent enhanced notifications: ${JSON.stringify(result)}`);
+
+    // Check for any errors in the response
+    const hasErrors = result.data && result.data.some((item: any) => item.status === 'error');
+    if (hasErrors) {
+      const errors = result.data.filter((item: any) => item.status === 'error');
+      log(`Some notifications failed: ${JSON.stringify(errors)}`);
+    }
 
     return res.json({
       ok: true,
       messageId: result.data?.[0]?.id,
       sentTo: pushTokens.length,
       tokensUsed: pushTokens.length,
+      hasErrors,
+      errors: hasErrors ? result.data.filter((item: any) => item.status === 'error') : undefined,
       notificationData: {
         title,
         body,
         authorName,
-        hasAuthorImage: !!optimizedAuthorImage,
-        hasPostImage: !!optimizedPostImage,
+        hasAuthorImage: !!authorImage,
+        hasPostImage: !!postImage,
       },
+      expoResponse: result,
     }, 200);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
@@ -375,11 +427,7 @@ async function getUserPushTokens(
     const databases = new Databases(client);
     const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
     
-    // You can either store push tokens in:
-    // Option 1: A separate pushTokens collection
-    // Option 2: As a field in your users collection
-    
-    // Option 1: Using a separate pushTokens collection (recommended)
+    // Try the pushTokens collection first (recommended approach)
     const pushTokensCollectionId = process.env.PUSH_TOKENS_COLLECTION_ID || 'push_tokens';
     
     try {
@@ -388,38 +436,62 @@ async function getUserPushTokens(
         pushTokensCollectionId, 
         [
           Query.contains('userId', userIds),
-          Query.limit(100)
+          Query.limit(100),
+          Query.orderDesc('$createdAt') // Get most recent tokens
         ]
       );
 
-      const tokens = pushTokenDocs.documents
-        .map((doc: any) => doc.pushToken)
-        .filter((token: string) => token && token.trim() !== '');
+      // Filter out duplicate tokens and invalid tokens
+      const validTokens = new Set<string>();
+      
+      pushTokenDocs.documents.forEach((doc: any) => {
+        const token = doc.pushToken || doc.token;
+        if (token && 
+            token.trim() !== '' && 
+            token.startsWith('ExponentPushToken[') && 
+            token.endsWith(']')) {
+          validTokens.add(token);
+        }
+      });
 
-      log(`Found ${tokens.length} push tokens from pushTokens collection`);
-      return tokens;
+      const tokens = Array.from(validTokens);
+      log(`Found ${tokens.length} valid push tokens from pushTokens collection`);
+      
+      if (tokens.length > 0) {
+        return tokens;
+      }
     } catch (pushTokenError) {
-      log(`PushTokens collection not found, trying users collection...`);
-      
-      // Option 2: Fallback to users collection with pushToken field
-      const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
-      
-      const userDocs = await databases.listDocuments(
-        databaseId,
-        usersCollectionId,
-        [
-          Query.contains('$id', userIds),
-          Query.limit(100)
-        ]
-      );
-
-      const tokens = userDocs.documents
-        .map((user: any) => user.pushToken || user.expoPushToken)
-        .filter((token: string) => token && token.trim() !== '');
-
-      log(`Found ${tokens.length} push tokens from users collection`);
-      return tokens;
+      log(`PushTokens collection error: ${pushTokenError}, trying users collection...`);
     }
+    
+    // Fallback to users collection with pushToken field
+    const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
+    
+    const userDocs = await databases.listDocuments(
+      databaseId,
+      usersCollectionId,
+      [
+        Query.contains('$id', userIds),
+        Query.limit(100)
+      ]
+    );
+
+    const validTokens = new Set<string>();
+    
+    userDocs.documents.forEach((user: any) => {
+      const token = user.pushToken || user.expoPushToken;
+      if (token && 
+          token.trim() !== '' && 
+          token.startsWith('ExponentPushToken[') && 
+          token.endsWith(']')) {
+        validTokens.add(token);
+      }
+    });
+
+    const tokens = Array.from(validTokens);
+    log(`Found ${tokens.length} valid push tokens from users collection`);
+    return tokens;
+    
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error fetching push tokens: ${errorMsg}`);
