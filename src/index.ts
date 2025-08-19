@@ -1,5 +1,4 @@
 import { Client, Databases, Models, Query, Messaging, ID } from 'node-appwrite';
-import nodeFetch from 'node-fetch';
 
 // Define interfaces
 interface WebhookPayload {
@@ -24,20 +23,17 @@ interface CommentDocument extends Models.Document {
   content?: string;
 }
 
-interface EnhancedNotificationData extends NotificationData {
-  authorName?: string;
-  authorImage?: string | null;
-  postImage?: string | null;
-  postTitle?: string;
-  commentContent?: string;
-}
-
 interface NotificationData {
   userIds: string[];
   title: string;
   body: string;
   postId: string;
   type: 'new_post' | 'new_comment';
+  authorName?: string;
+  authorImage?: string | null;
+  postImage?: string | null;
+  postTitle?: string;
+  commentContent?: string;
 }
 
 interface FunctionContext {
@@ -63,11 +59,6 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
   if (!process.env.APPWRITE_API_KEY) {
     error('APPWRITE_API_KEY is not defined');
     return res.json({ ok: false, error: 'APPWRITE_API_KEY is not defined' }, 500);
-  }
-
-  if (!process.env.EXPO_ACCESS_TOKEN) {
-    error('EXPO_ACCESS_TOKEN is not defined');
-    return res.json({ ok: false, error: 'EXPO_ACCESS_TOKEN is not defined' }, 500);
   }
 
   const client = new Client()
@@ -115,15 +106,13 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
 
     // Handle webhook events based on collection ID
     if (webhookPayload.$collectionId === process.env.POSTS_COLLECTION_ID) {
-      // For webhook events, the document data is directly in the payload
       const documentData = webhookPayload.document || webhookPayload;
       return await handleNewPost(documentData as PostDocument, databases, messaging, log, error, res);
     } else if (webhookPayload.$collectionId === process.env.COMMENTS_COLLECTION_ID) {
-      // For webhook events, the document data is directly in the payload
       const documentData = webhookPayload.document || webhookPayload;
       return await handleNewComment(documentData as CommentDocument, databases, messaging, log, error, res);
     } else {
-      // Handle direct function calls (not webhook events)
+      // Handle direct function calls
       return await handleDirectCall(webhookPayload, messaging, log, error, res);
     }
   } catch (e: unknown) {
@@ -162,8 +151,8 @@ async function handleNewPost(
       return res.json({ ok: true, message: 'No users to notify' }, 200);
     }
 
-    // Create rich notification content
-    const title = 'New Post';
+    // Create notification content
+    const title = '📝 New Post';
     let body = `${authorName} shared a new post`;
     
     if (postDocument.title) {
@@ -175,7 +164,7 @@ async function handleNewPost(
       body += `: "${preview}"`;
     }
 
-    const notificationData: EnhancedNotificationData = {
+    const notificationData: NotificationData = {
       userIds,
       title,
       body,
@@ -187,7 +176,7 @@ async function handleNewPost(
       postTitle: postDocument.title
     };
 
-    return await sendPushNotifications(notificationData, messaging, log, error, res);
+    return await sendAppwriteNotifications(notificationData, messaging, log, error, res);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error handling new post: ${errorMsg}`);
@@ -224,8 +213,8 @@ async function handleNewComment(
     const commenterName = commenter.name || 'Someone';
     const commenterImage = commenter.image || null;
 
-    // Create rich notification content
-    const title = 'New Comment';
+    // Create notification content
+    const title = '💬 New Comment';
     let body = `${commenterName} commented on your post`;
     
     if (post.title) {
@@ -237,7 +226,7 @@ async function handleNewComment(
       body += `: "${preview}"`;
     }
 
-    const notificationData: EnhancedNotificationData = {
+    const notificationData: NotificationData = {
       userIds,
       title,
       body,
@@ -250,7 +239,7 @@ async function handleNewComment(
       commentContent: commentDocument.content
     };
 
-    return await sendPushNotifications(notificationData, messaging, log, error, res);
+    return await sendAppwriteNotifications(notificationData, messaging, log, error, res);
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error handling new comment: ${errorMsg}`);
@@ -271,11 +260,11 @@ async function handleDirectCall(
     throw new Error('Missing required fields: userIds, title, body, postId, type');
   }
 
-  return await sendPushNotifications({ userIds, title, body, postId, type }, messaging, log, error, res);
+  return await sendAppwriteNotifications({ userIds, title, body, postId, type }, messaging, log, error, res);
 }
 
-async function sendPushNotifications(
-  notificationData: EnhancedNotificationData,
+async function sendAppwriteNotifications(
+  notificationData: NotificationData,
   messaging: Messaging,
   log: (msg: string) => void,
   error: (msg: string) => void,
@@ -283,119 +272,47 @@ async function sendPushNotifications(
 ) {
   const { userIds, title, body, postId, type, authorName, authorImage, postImage, postTitle, commentContent } = notificationData;
 
-  log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
+  log(`Sending ${type} notification via Appwrite Messaging to users: ${userIds.join(', ')}`);
 
   try {
-    const pushTokens = await getUserPushTokens(userIds, log, error);
-    if (pushTokens.length === 0) {
-      log('No push tokens found for the specified users');
-      return res.json({ ok: true, message: 'No push tokens found', sentTo: 0 }, 200);
-    }
-
-    log(`Found ${pushTokens.length} push tokens for ${userIds.length} users`);
-
-    // Create enhanced Expo payload with better Android support
-    const expoPayload = {
-      to: pushTokens,
-      title,
-      body,
-      data: {
-        postId,
-        type,
-        authorName,
-        authorImage,
-        postImage,
-        postTitle,
-        commentContent,
-        screen: 'PostDetails',
-        params: { postId },
-        // Add timestamp for uniqueness
-        timestamp: Date.now(),
-      },
-      // Android specific configuration
-      android: {
-        channelId: 'posts', // Use the channel we created
-        priority: 'high',
-        sound: 'default',
-        vibrate: [0, 250, 250, 250],
-        // Enable notification images for Android
-        ...(authorImage && {
-          largeIcon: authorImage,
-        }),
-        ...(postImage && {
-          bigPicture: postImage,
-        }),
-        // Android notification style
-        style: postImage ? 'bigPicture' : 'bigText',
-        color: '#007AFF', // Your app's primary color
-      },
-      // iOS specific configuration
-      ios: {
-        sound: 'default',
-        badge: 1,
-        // iOS doesn't support images in notifications natively
-        // but we can include them in data for custom handling
-      },
-      // General configuration
-      badge: 1,
-      sound: 'default',
-      priority: 'high',
-      // Content available for background processing
-      contentAvailable: true,
-      // Mutable content for rich notifications (iOS)
-      mutableContent: true,
+    // Create notification data with rich content
+    const messageData = {
+      postId,
+      type,
+      authorName,
+      authorImage,
+      postImage,
+      postTitle,
+      commentContent,
+      screen: 'PostDetails',
+      params: { postId },
+      timestamp: Date.now(),
     };
 
-    log(`Enhanced Expo payload: ${JSON.stringify(expoPayload, null, 2)}`);
+    // Create push notification using Appwrite Messaging
+    const pushNotification = await messaging.createPush(
+      ID.unique(), // messageId
+      title,
+      body,
+      [], // topics (empty for user targeting)
+      userIds, // users
+      [], // targets (empty since we're using users)
+      JSON.stringify(messageData), // data
+      null, // action (optional click action URL)
+      null, // icon (optional)
+      null, // sound (optional)
+      null, // color (optional)
+      null, // tag (optional)
+      1, // badge count
+      null // draft (set to null to send immediately)
+    );
 
-    const response = await nodeFetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Accept-Encoding': 'gzip, deflate',
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.EXPO_ACCESS_TOKEN}`,
-      },
-      body: JSON.stringify(expoPayload),
-    });
-
-    const responseText = await response.text();
-    log(`Expo API response status: ${response.status}`);
-    log(`Expo API response: ${responseText}`);
-
-    if (!response.ok) {
-      error(`Expo API error: ${response.status} - ${responseText}`);
-      return res.json({ 
-        ok: false, 
-        error: `Expo API error: ${response.status} - ${responseText}`,
-        status: response.status 
-      }, 500);
-    }
-
-    let result;
-    try {
-      result = JSON.parse(responseText);
-    } catch (parseError) {
-      log(`Failed to parse response as JSON: ${parseError}`);
-      result = { data: [{ status: 'ok' }] };
-    }
-
-    log(`Successfully sent enhanced notifications: ${JSON.stringify(result)}`);
-
-    // Check for any errors in the response
-    const hasErrors = result.data && result.data.some((item: any) => item.status === 'error');
-    if (hasErrors) {
-      const errors = result.data.filter((item: any) => item.status === 'error');
-      log(`Some notifications failed: ${JSON.stringify(errors)}`);
-    }
+    log(`Successfully created Appwrite push notification: ${JSON.stringify(pushNotification)}`);
 
     return res.json({
       ok: true,
-      messageId: result.data?.[0]?.id,
-      sentTo: pushTokens.length,
-      tokensUsed: pushTokens.length,
-      hasErrors,
-      errors: hasErrors ? result.data.filter((item: any) => item.status === 'error') : undefined,
+      messageId: pushNotification.$id,
+      sentTo: userIds.length,
       notificationData: {
         title,
         body,
@@ -403,98 +320,23 @@ async function sendPushNotifications(
         hasAuthorImage: !!authorImage,
         hasPostImage: !!postImage,
       },
-      expoResponse: result,
+      appwriteResponse: pushNotification,
     }, 200);
+
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
-    error(`Error sending push notification: ${errorMsg}`);
-    return res.json({ ok: false, error: errorMsg }, 500);
-  }
-}
-
-async function getUserPushTokens(
-  userIds: string[],
-  log: (msg: string) => void,
-  error: (msg: string) => void
-): Promise<string[]> {
-  try {
-    // Initialize client and database for getting push tokens
-    const client = new Client()
-      .setEndpoint('https://cloud.appwrite.io/v1')
-      .setProject(process.env.APPWRITE_PROJECT_ID!)
-      .setKey(process.env.APPWRITE_API_KEY!);
-
-    const databases = new Databases(client);
-    const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
+    error(`Error sending Appwrite push notification: ${errorMsg}`);
     
-    // Try the pushTokens collection first (recommended approach)
-    const pushTokensCollectionId = process.env.PUSH_TOKENS_COLLECTION_ID || 'push_tokens';
-    
-    try {
-      const pushTokenDocs = await databases.listDocuments(
-        databaseId, 
-        pushTokensCollectionId, 
-        [
-          Query.contains('userId', userIds),
-          Query.limit(100),
-          Query.orderDesc('$createdAt') // Get most recent tokens
-        ]
-      );
-
-      // Filter out duplicate tokens and invalid tokens
-      const validTokens = new Set<string>();
-      
-      pushTokenDocs.documents.forEach((doc: any) => {
-        const token = doc.pushToken || doc.token;
-        if (token && 
-            token.trim() !== '' && 
-            token.startsWith('ExponentPushToken[') && 
-            token.endsWith(']')) {
-          validTokens.add(token);
-        }
-      });
-
-      const tokens = Array.from(validTokens);
-      log(`Found ${tokens.length} valid push tokens from pushTokens collection`);
-      
-      if (tokens.length > 0) {
-        return tokens;
-      }
-    } catch (pushTokenError) {
-      log(`PushTokens collection error: ${pushTokenError}, trying users collection...`);
+    // Log the full error for debugging
+    if (e instanceof Error && e.message.includes('Provider not found')) {
+      error(`Appwrite Messaging provider not configured. Please set up FCM provider in Appwrite Console.`);
+      return res.json({ 
+        ok: false, 
+        error: 'Messaging provider not configured. Please set up FCM in Appwrite Console.',
+        details: errorMsg 
+      }, 500);
     }
     
-    // Fallback to users collection with pushToken field
-    const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
-    
-    const userDocs = await databases.listDocuments(
-      databaseId,
-      usersCollectionId,
-      [
-        Query.contains('$id', userIds),
-        Query.limit(100)
-      ]
-    );
-
-    const validTokens = new Set<string>();
-    
-    userDocs.documents.forEach((user: any) => {
-      const token = user.pushToken || user.expoPushToken;
-      if (token && 
-          token.trim() !== '' && 
-          token.startsWith('ExponentPushToken[') && 
-          token.endsWith(']')) {
-        validTokens.add(token);
-      }
-    });
-
-    const tokens = Array.from(validTokens);
-    log(`Found ${tokens.length} valid push tokens from users collection`);
-    return tokens;
-    
-  } catch (e: unknown) {
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    error(`Error fetching push tokens: ${errorMsg}`);
-    return [];
+    return res.json({ ok: false, error: errorMsg }, 500);
   }
 }
