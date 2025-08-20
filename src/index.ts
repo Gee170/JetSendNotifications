@@ -1,4 +1,4 @@
-import { Client, Databases, Models, Query, Messaging, ID } from 'node-appwrite';
+const { Client, Databases, Models, Query, Messaging, ID } = require('node-appwrite');
 
 // Define interfaces
 interface WebhookPayload {
@@ -132,8 +132,8 @@ async function handleNewPost(
 ) {
   try {
     log(`Post document: ${JSON.stringify(postDocument)}`);
-    const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
-    const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
+    const databaseId = process.env.APPWRITE_DATABASE_ID || '6896f984003d36dd03a0';
+    const usersCollectionId = process.env.USERS_COLLECTION_ID || '6896fb860037b66180f3';
 
     // Get author information
     const author = await databases.getDocument(databaseId, usersCollectionId, postDocument.authorId);
@@ -194,9 +194,9 @@ async function handleNewComment(
 ) {
   try {
     log(`Comment document: ${JSON.stringify(commentDocument)}`);
-    const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
+    const databaseId = process.env.APPWRITE_DATABASE_ID || '6896f984003d36dd03a0';
     const postsCollectionId = process.env.POSTS_COLLECTION_ID || '6896fbb2003568eb4840';
-    const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
+    const usersCollectionId = process.env.USERS_COLLECTION_ID || '6896fb860037b66180f3';
 
     // Get the post and commenter information
     const [post, commenter] = await Promise.all([
@@ -294,17 +294,17 @@ async function sendAppwriteNotifications(
       ID.unique(), // messageId
       title,
       body,
-      [], // topics (empty for user targeting)
+      [], // topics
       userIds, // users
       [], // targets (empty since we're using users)
       JSON.stringify(messageData), // data
-      null, // action (optional click action URL)
-      null, // icon (optional)
-      null, // sound (optional)
-      null, // color (optional)
-      null, // tag (optional)
+      null, // action
+      null, // icon
+      null, // sound
+      null, // color
+      null, // tag
       1, // badge count
-      null // draft (set to null to send immediately)
+      null // draft
     );
 
     log(`Successfully created Appwrite push notification: ${JSON.stringify(pushNotification)}`);
@@ -322,12 +322,10 @@ async function sendAppwriteNotifications(
       },
       appwriteResponse: pushNotification,
     }, 200);
-
   } catch (e: unknown) {
     const errorMsg = e instanceof Error ? e.message : String(e);
     error(`Error sending Appwrite push notification: ${errorMsg}`);
     
-    // Log the full error for debugging
     if (e instanceof Error && e.message.includes('Provider not found')) {
       error(`Appwrite Messaging provider not configured. Please set up FCM provider in Appwrite Console.`);
       return res.json({ 
