@@ -1,60 +1,11 @@
-import { Client, Databases, Models, Query, Messaging, ID } from 'node-appwrite';
-import nodeFetch from 'node-fetch';
+const { Client, Users, ID } = require('node-appwrite');
 
-// Define interfaces
-interface WebhookPayload {
-  events: string[];
-  document: Models.Document;
-  $collectionId?: string;
-  [key: string]: any;
-}
-
-interface PostDocument extends Models.Document {
-  authorId: string;
-  authorName?: string;
-  title?: string;
-  content?: string;
-  image?: string | null;
-}
-
-interface CommentDocument extends Models.Document {
-  userId: string;
-  authorName?: string;
-  postId: string;
-  content?: string;
-}
-
-interface EnhancedNotificationData extends NotificationData {
-  authorName?: string;
-  authorImage?: string | null;
-  postImage?: string | null;
-  postTitle?: string;
-  commentContent?: string;
-}
-
-interface NotificationData {
-  userIds: string[];
-  title: string;
-  body: string;
-  postId: string;
-  type: 'new_post' | 'new_comment';
-}
-
-interface FunctionContext {
-  req: {
-    body: string;
-    headers: Record<string, string>;
-    method: string;
-    path: string;
-  };
-  res: {
-    json: (data: any, status?: number) => void;
-  };
-  log: (msg: string) => void;
-  error: (msg: string) => void;
-}
-
-module.exports = async ({ req, res, log, error }: FunctionContext) => {
+module.exports = async ({ req, res, log, error }) => {
+  // Add detailed request logging
+  log('=== FUNCTION START ===');
+  log(`Request method: ${req.method}`);
+  log(`Request headers: ${JSON.stringify(req.headers, null, 2)}`);
+  
   if (!process.env.APPWRITE_PROJECT_ID) {
     error('APPWRITE_PROJECT_ID is not defined');
     return res.json({ ok: false, error: 'APPWRITE_PROJECT_ID is not defined' }, 500);
@@ -65,436 +16,67 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
     return res.json({ ok: false, error: 'APPWRITE_API_KEY is not defined' }, 500);
   }
 
-  if (!process.env.EXPO_ACCESS_TOKEN) {
-    error('EXPO_ACCESS_TOKEN is not defined');
-    return res.json({ ok: false, error: 'EXPO_ACCESS_TOKEN is not defined' }, 500);
-  }
-
   const client = new Client()
     .setEndpoint('https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_PROJECT_ID)
     .setKey(process.env.APPWRITE_API_KEY);
 
-  log(`Client initialized with project ID: ${process.env.APPWRITE_PROJECT_ID}`);
+  const users = new Users(client);
 
-  const databases = new Databases(client);
-  const messaging = new Messaging(client);
+  log(`Received request to register push token`);
 
   try {
-    log(`Raw req.body: ${req.body} (type: ${typeof req.body})`);
-
-    let webhookPayload: WebhookPayload;
+    let payload;
     try {
-      if (typeof req.body === 'string') {
-        const cleanedBody = req.body.replace(/^"|"$/g, '').replace(/\\"/g, '"');
-        log(`Cleaned req.body: ${cleanedBody}`);
-        try {
-          webhookPayload = JSON.parse(cleanedBody);
-        } catch (err) {
-          log(`Failed to parse req.body as JSON, constructing payload manually`);
-          webhookPayload = {
-            userIds: ["6899b68b00337f047f35"],
-            title: "Test Notification",
-            body: cleanedBody,
-            postId: "6897373f0013ebd5a0c6",
-            type: "new_post",
-            events: [],
-            document: {} as Models.Document
-          };
-        }
-      } else if (typeof req.body === 'object' && req.body !== null) {
-        webhookPayload = req.body;
-      } else {
-        throw new Error('Invalid request body format');
-      }
+      payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      log(`Parsed payload: ${JSON.stringify(payload)}`);
     } catch (err) {
-      throw new Error(`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`);
+      error(`Invalid JSON body: ${err.message}`);
+      return res.json({ ok: false, error: `Invalid JSON body: ${err.message}` }, 400);
     }
 
-    log(`Parsed webhook payload in main: ${JSON.stringify(webhookPayload)}`);
+    const { userId, token, platform, deviceId } = payload;
 
-    // Handle webhook events based on collection ID
-    if (webhookPayload.$collectionId === process.env.POSTS_COLLECTION_ID) {
-      // For webhook events, the document data is directly in the payload
-      const documentData = webhookPayload.document || webhookPayload;
-      return await handleNewPost(documentData as PostDocument, databases, messaging, log, error, res);
-    } else if (webhookPayload.$collectionId === process.env.COMMENTS_COLLECTION_ID) {
-      // For webhook events, the document data is directly in the payload
-      const documentData = webhookPayload.document || webhookPayload;
-      return await handleNewComment(documentData as CommentDocument, databases, messaging, log, error, res);
-    } else {
-      // Handle direct function calls (not webhook events)
-      return await handleDirectCall(webhookPayload, messaging, log, error, res);
-    }
-  } catch (e: unknown) {
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    error(`Failed to process request: ${errorMsg}`);
-    return res.json({ ok: false, error: errorMsg }, 500);
-  }
-};
-
-async function handleNewPost(
-  postDocument: PostDocument,
-  databases: Databases,
-  messaging: Messaging,
-  log: (msg: string) => void,
-  error: (msg: string) => void,
-  res: { json: (data: any, status?: number) => void }
-) {
-  try {
-    log(`Post document: ${JSON.stringify(postDocument)}`);
-    const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
-    const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
-
-    // Get author information
-    const author = await databases.getDocument(databaseId, usersCollectionId, postDocument.authorId);
-    const authorName = author.name || 'Someone';
-    const authorImage = author.image || null;
-
-    // Get all users except the post author
-    const users = await databases.listDocuments(databaseId, usersCollectionId, [Query.limit(100)]);
-    const userIds = users.documents
-      .map((user: Models.Document) => user.$id)
-      .filter((userId: string) => userId !== postDocument.authorId);
-
-    if (userIds.length === 0) {
-      log('No users to notify for new post');
-      return res.json({ ok: true, message: 'No users to notify' }, 200);
-    }
-
-    // Create rich notification content
-    const title = 'New Post';
-    let body = `${authorName} shared a new post`;
-    
-    if (postDocument.title) {
-      body += `: "${postDocument.title}"`;
-    } else if (postDocument.content) {
-      const preview = postDocument.content.length > 60 
-        ? postDocument.content.slice(0, 60) + '...' 
-        : postDocument.content;
-      body += `: "${preview}"`;
-    }
-
-    const notificationData: EnhancedNotificationData = {
-      userIds,
-      title,
-      body,
-      postId: postDocument.$id,
-      type: 'new_post',
-      authorName,
-      authorImage,
-      postImage: postDocument.image,
-      postTitle: postDocument.title
-    };
-
-    return await sendPushNotifications(notificationData, messaging, log, error, res);
-  } catch (e: unknown) {
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    error(`Error handling new post: ${errorMsg}`);
-    return res.json({ ok: false, error: errorMsg }, 500);
-  }
-}
-
-async function handleNewComment(
-  commentDocument: CommentDocument,
-  databases: Databases,
-  messaging: Messaging,
-  log: (msg: string) => void,
-  error: (msg: string) => void,
-  res: { json: (data: any, status?: number) => void }
-) {
-  try {
-    log(`Comment document: ${JSON.stringify(commentDocument)}`);
-    const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
-    const postsCollectionId = process.env.POSTS_COLLECTION_ID || '6896fbb2003568eb4840';
-    const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
-
-    // Get the post and commenter information
-    const [post, commenter] = await Promise.all([
-      databases.getDocument(databaseId, postsCollectionId, commentDocument.postId),
-      databases.getDocument(databaseId, usersCollectionId, commentDocument.userId)
-    ]);
-    
-    if (post.authorId === commentDocument.userId) {
-      log('Comment author is the same as post author, no notification needed');
-      return res.json({ ok: true, message: 'No notification needed - same user' }, 200);
-    }
-
-    const userIds = [post.authorId];
-    const commenterName = commenter.name || 'Someone';
-    const commenterImage = commenter.image || null;
-
-    // Create rich notification content
-    const title = 'New Comment';
-    let body = `${commenterName} commented on your post`;
-    
-    if (post.title) {
-      body += `: "${post.title}"`;
-    } else if (post.content) {
-      const preview = post.content.length > 40 
-        ? post.content.slice(0, 40) + '...' 
-        : post.content;
-      body += `: "${preview}"`;
-    }
-
-    const notificationData: EnhancedNotificationData = {
-      userIds,
-      title,
-      body,
-      postId: commentDocument.postId,
-      type: 'new_comment',
-      authorName: commenterName,
-      authorImage: commenterImage,
-      postImage: post.image,
-      postTitle: post.title,
-      commentContent: commentDocument.content
-    };
-
-    return await sendPushNotifications(notificationData, messaging, log, error, res);
-  } catch (e: unknown) {
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    error(`Error handling new comment: ${errorMsg}`);
-    return res.json({ ok: false, error: errorMsg }, 500);
-  }
-}
-
-async function handleDirectCall(
-  payload: WebhookPayload,
-  messaging: Messaging,
-  log: (msg: string) => void,
-  error: (msg: string) => void,
-  res: { json: (data: any, status?: number) => void }
-) {
-  const { userIds, title, body, postId, type } = payload;
-
-  if (!userIds || !title || !body || !postId || !type) {
-    throw new Error('Missing required fields: userIds, title, body, postId, type');
-  }
-
-  return await sendPushNotifications({ userIds, title, body, postId, type }, messaging, log, error, res);
-}
-
-async function sendPushNotifications(
-  notificationData: EnhancedNotificationData,
-  messaging: Messaging,
-  log: (msg: string) => void,
-  error: (msg: string) => void,
-  res: { json: (data: any, status?: number) => void }
-) {
-  const { userIds, title, body, postId, type, authorName, authorImage, postImage, postTitle, commentContent } = notificationData;
-
-  log(`Sending ${type} notification to users: ${userIds.join(', ')}`);
-
-  try {
-    const pushTokens = await getUserPushTokens(userIds, log, error);
-    if (pushTokens.length === 0) {
-      log('No push tokens found for the specified users');
-      return res.json({ ok: true, message: 'No push tokens found', sentTo: 0 }, 200);
-    }
-
-    log(`Found ${pushTokens.length} push tokens for ${userIds.length} users`);
-
-    // Create enhanced Expo payload with better Android support
-    const expoPayload = {
-      to: pushTokens,
-      title,
-      body,
-      data: {
-        postId,
-        type,
-        authorName,
-        authorImage,
-        postImage,
-        postTitle,
-        commentContent,
-        screen: 'PostDetails',
-        params: { postId },
-        // Add timestamp for uniqueness
-        timestamp: Date.now(),
-      },
-      // Android specific configuration
-      android: {
-        channelId: 'posts', // Use the channel we created
-        priority: 'high',
-        sound: 'default',
-        vibrate: [0, 250, 250, 250],
-        // Enable notification images for Android
-        ...(authorImage && {
-          largeIcon: authorImage,
-        }),
-        ...(postImage && {
-          bigPicture: postImage,
-        }),
-        // Android notification style
-        style: postImage ? 'bigPicture' : 'bigText',
-        color: '#007AFF', // Your app's primary color
-      },
-      // iOS specific configuration
-      ios: {
-        sound: 'default',
-        badge: 1,
-        // iOS doesn't support images in notifications natively
-        // but we can include them in data for custom handling
-      },
-      // General configuration
-      badge: 1,
-      sound: 'default',
-      priority: 'high',
-      // Content available for background processing
-      contentAvailable: true,
-      // Mutable content for rich notifications (iOS)
-      mutableContent: true,
-    };
-
-    log(`Enhanced Expo payload: ${JSON.stringify(expoPayload, null, 2)}`);
-
-    const response = await nodeFetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Accept-Encoding': 'gzip, deflate',
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.EXPO_ACCESS_TOKEN}`,
-      },
-      body: JSON.stringify(expoPayload),
-    });
-
-    const responseText = await response.text();
-    log(`Expo API response status: ${response.status}`);
-    log(`Expo API response: ${responseText}`);
-
-    if (!response.ok) {
-      error(`Expo API error: ${response.status} - ${responseText}`);
+    if (!userId || !token || !platform) {
+      error('Missing required fields: userId, token, platform');
       return res.json({ 
         ok: false, 
-        error: `Expo API error: ${response.status} - ${responseText}`,
-        status: response.status 
-      }, 500);
+        error: 'Missing required fields: userId, token, platform',
+        received: { userId: !!userId, token: !!token, platform: !!platform }
+      }, 400);
     }
 
-    let result;
-    try {
-      result = JSON.parse(responseText);
-    } catch (parseError) {
-      log(`Failed to parse response as JSON: ${parseError}`);
-      result = { data: [{ status: 'ok' }] };
-    }
+    log(`Attempting to create push target for user: ${userId}`);
+    log(`Platform: ${platform}, DeviceId: ${deviceId || 'null'}`);
+    log(`Token: ${token.substring(0, 20)}...`); // Log partial token for debugging
 
-    log(`Successfully sent enhanced notifications: ${JSON.stringify(result)}`);
+    // Create push notification target using Users service
+    const target = await users.createTarget(
+      userId,           // userId
+      ID.unique(),      // targetId
+      'push',           // providerType - 'push' for push notifications
+      token,            // identifier - the FCM/APNs token
+      undefined,        // providerId - optional, can be undefined for push
+      deviceId || undefined  // name - optional device identifier
+    );
 
-    // Check for any errors in the response
-    const hasErrors = result.data && result.data.some((item: any) => item.status === 'error');
-    if (hasErrors) {
-      const errors = result.data.filter((item: any) => item.status === 'error');
-      log(`Some notifications failed: ${JSON.stringify(errors)}`);
-    }
+    log(`Successfully created push target: ${JSON.stringify(target)}`);
 
     return res.json({
       ok: true,
-      messageId: result.data?.[0]?.id,
-      sentTo: pushTokens.length,
-      tokensUsed: pushTokens.length,
-      hasErrors,
-      errors: hasErrors ? result.data.filter((item: any) => item.status === 'error') : undefined,
-      notificationData: {
-        title,
-        body,
-        authorName,
-        hasAuthorImage: !!authorImage,
-        hasPostImage: !!postImage,
-      },
-      expoResponse: result,
+      targetId: target.$id,
+      message: 'Push token registered successfully',
+      target: target
     }, 200);
-  } catch (e: unknown) {
+  } catch (e) {
     const errorMsg = e instanceof Error ? e.message : String(e);
-    error(`Error sending push notification: ${errorMsg}`);
-    return res.json({ ok: false, error: errorMsg }, 500);
-  }
-}
-
-async function getUserPushTokens(
-  userIds: string[],
-  log: (msg: string) => void,
-  error: (msg: string) => void
-): Promise<string[]> {
-  try {
-    // Initialize client and database for getting push tokens
-    const client = new Client()
-      .setEndpoint('https://cloud.appwrite.io/v1')
-      .setProject(process.env.APPWRITE_PROJECT_ID!)
-      .setKey(process.env.APPWRITE_API_KEY!);
-
-    const databases = new Databases(client);
-    const databaseId = process.env.APPWRITE_DATABASE_ID || 'default';
+    error(`Failed to register push token: ${errorMsg}`);
     
-    // Try the pushTokens collection first (recommended approach)
-    const pushTokensCollectionId = process.env.PUSH_TOKENS_COLLECTION_ID || 'push_tokens';
-    
-    try {
-      const pushTokenDocs = await databases.listDocuments(
-        databaseId, 
-        pushTokensCollectionId, 
-        [
-          Query.contains('userId', userIds),
-          Query.limit(100),
-          Query.orderDesc('$createdAt') // Get most recent tokens
-        ]
-      );
-
-      // Filter out duplicate tokens and invalid tokens
-      const validTokens = new Set<string>();
-      
-      pushTokenDocs.documents.forEach((doc: any) => {
-        const token = doc.pushToken || doc.token;
-        if (token && 
-            token.trim() !== '' && 
-            token.startsWith('ExponentPushToken[') && 
-            token.endsWith(']')) {
-          validTokens.add(token);
-        }
-      });
-
-      const tokens = Array.from(validTokens);
-      log(`Found ${tokens.length} valid push tokens from pushTokens collection`);
-      
-      if (tokens.length > 0) {
-        return tokens;
-      }
-    } catch (pushTokenError) {
-      log(`PushTokens collection error: ${pushTokenError}, trying users collection...`);
+    // Add stack trace for debugging
+    if (e instanceof Error && e.stack) {
+      error(`Stack trace: ${e.stack}`);
     }
     
-    // Fallback to users collection with pushToken field
-    const usersCollectionId = process.env.USERS_COLLECTION_ID || 'users_collection';
-    
-    const userDocs = await databases.listDocuments(
-      databaseId,
-      usersCollectionId,
-      [
-        Query.contains('$id', userIds),
-        Query.limit(100)
-      ]
-    );
-
-    const validTokens = new Set<string>();
-    
-    userDocs.documents.forEach((user: any) => {
-      const token = user.pushToken || user.expoPushToken;
-      if (token && 
-          token.trim() !== '' && 
-          token.startsWith('ExponentPushToken[') && 
-          token.endsWith(']')) {
-        validTokens.add(token);
-      }
-    });
-
-    const tokens = Array.from(validTokens);
-    log(`Found ${tokens.length} valid push tokens from users collection`);
-    return tokens;
-    
-  } catch (e: unknown) {
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    error(`Error fetching push tokens: ${errorMsg}`);
-    return [];
+    return res.json({ ok: false, error: errorMsg }, 500);
   }
-}
+};
