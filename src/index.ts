@@ -104,15 +104,22 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
 
     log(`Parsed webhook payload: ${JSON.stringify(webhookPayload)}`);
 
+    log(`Webhook $collectionId: ${webhookPayload.$collectionId}`);
+    log(`ENV COMMENTS_COLLECTION_ID: ${process.env.COMMENTS_COLLECTION_ID}`);
+    log(`ENV POSTS_COLLECTION_ID: ${process.env.POSTS_COLLECTION_ID}`);
+
     // Handle webhook events based on collection ID
     if (webhookPayload.$collectionId === process.env.POSTS_COLLECTION_ID) {
+      log('Handling as new post');
       const documentData = webhookPayload.document || webhookPayload;
       return await handleNewPost(documentData as PostDocument, databases, messaging, log, error, res);
     } else if (webhookPayload.$collectionId === process.env.COMMENTS_COLLECTION_ID) {
+      log('Handling as new comment');
       const documentData = webhookPayload.document || webhookPayload;
       return await handleNewComment(documentData as CommentDocument, databases, messaging, log, error, res);
     } else {
       // Handle direct function calls
+      log('Falling back to direct call');
       return await handleDirectCall(webhookPayload, messaging, log, error, res);
     }
   } catch (e: unknown) {
