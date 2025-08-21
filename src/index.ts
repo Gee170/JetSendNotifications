@@ -111,7 +111,7 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
       throw new Error(`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    log(`Parsed webhook payload: ${JSON.stringify(webhookPayload)}`);
+    log(`Parsed webhook payload in main: ${JSON.stringify(webhookPayload)}`);
 
     // Handle webhook events based on collection ID
     if (webhookPayload.$collectionId === process.env.POSTS_COLLECTION_ID) {
