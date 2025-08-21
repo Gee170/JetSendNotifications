@@ -102,7 +102,7 @@ module.exports = async ({ req, res, log, error }: FunctionContext) => {
       throw new Error(`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    log(`Parsed webhook payload: ${JSON.stringify(webhookPayload)}`);
+    log(`Parsed webhook payload in messaging: ${JSON.stringify(webhookPayload)}`);
 
     log(`Webhook $collectionId: ${webhookPayload.$collectionId}`);
     log(`ENV COMMENTS_COLLECTION_ID: ${process.env.COMMENTS_COLLECTION_ID}`);
